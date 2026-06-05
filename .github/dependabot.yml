@@ -1,0 +1,17 @@
+version: 2
+
+updates:
+  # Keep the pinned GitHub Actions SHAs current.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    reviewers: ["kuk1song"]
+    labels: ["dependencies", "ci"]
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci(deps)"
+
+  # No SwiftPM dependencies yet — VibeOne is zero-dependency. If that changes,
+  # add a `swift` package-ecosystem entry here.

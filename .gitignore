@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Swift Package Manager / Xcode build artifacts
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Note: private planning docs (local_notes/) and the local AI control file
+# (CLAUDE.md) are excluded via .git/info/exclude, not here — so they stay
+# local-only without advertising their names in the public repo.
