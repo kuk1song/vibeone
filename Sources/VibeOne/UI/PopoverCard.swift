@@ -1,18 +1,23 @@
 import SwiftUI
 
-/// The VibeOne menu-bar popover content — the REAL product shell.
+/// The VibeOne menu-bar popover — a music-player "now playing" card (ADR-006).
 ///
-/// ONE consistent look, built ENTIRELY from `DesignSystem.swift` (no raw
-/// numbers / hex / font sizes here). It lays a faint adaptive `DS.Colors.surface`
-/// tint over the system vibrant window chrome that `.menuBarExtraStyle(.window)`
-/// provides, so text areas read calm while light/dark + Reduce Transparency keep
-/// adapting for free.
+/// Layout (top → bottom):
+///   • cover    — the living LED-face mascot (`FaceCover`), tinted to the active
+///                agent; the same identity as the menu-bar icon.
+///   • trackInfo — the active agent's name + the project ("now playing").
+///   • progress  — a thin line tracking CONFIG SYNC (memory / skills / MCP), a
+///                 REAL datum — not a faked playback time.
+///   • transport — sync · switch · big launch ("play") · switch · more.
 ///
-/// Layout (top → bottom), a single leading alignment axis throughout:
-/// header (brand mark + "VibeOne" + project) → divider → segmented Claude/Codex
-/// switch → status row → footer (launch button + monospaced command). Switching
-/// agents animates the pill, the status dot/text, the footer, AND (via shared
-/// state) the menu-bar icon tint — symmetrically for both agents.
+/// Built ENTIRELY from `DesignSystem.swift` tokens (no raw numbers / hex / font
+/// sizes here). Switching agents animates the cover tint, the title, the progress
+/// accent, AND (via shared `AppState`) the menu-bar icon — symmetrically.
+///
+/// This is the UI shell only. The transport gives light visual feedback; the
+/// session-handoff (M2) and config-sync (M3) engines are wired in a later step
+/// (see TASK.md / ADR-006). The progress placeholder already has the real shape
+/// (N of 3 dimensions), so wiring `ConfigStatus` is a drop-in.
 struct PopoverCard: View {
     /// Shared with the menu-bar label so the icon tint follows the selection.
     @ObservedObject var state: AppState
@@ -20,82 +25,97 @@ struct PopoverCard: View {
     @State private var launching = false
 
     private let projectName = "slash-stage"
-    private let projectDir = "~/slash-stage"
 
     private var agent: Agent { state.selection }
+    private var other: Agent { agent == .claude ? .codex : .claude }
+    private var accent: Color { DS.Colors.accent(for: agent) }
+
+    // Placeholder config-sync state; replaced by a real `ConfigStatus` snapshot
+    // when M3 is wired. Shape is honest: N of 3 dimensions (memory / skills / MCP).
+    private let syncedDimensions = 2
+    private let totalDimensions = 3
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            divider
-            VStack(alignment: .leading, spacing: DS.Spacing.lg) {
-                AgentSegmentedSwitch(selection: $state.selection)
-                StatusRow(
-                    accent: DS.Colors.accent(for: agent),
-                    primary: "Active · \(agent.title)",
-                    secondary: state.availability.summary
-                )
-                footer
-            }
-            .padding(DS.Spacing.lg)
-        }
-        .frame(width: DS.Size.cardWidth)
-        // No background: ride the genuine system popover material (like native
-        // Control Center popovers). Text stays legible via vibrancy-aware
-        // semantic colors (.primary/.secondary).
-    }
-
-    // MARK: - Header
-
-    private var header: some View {
-        HStack(spacing: DS.Spacing.md) {
-            BrandMark()
-            VStack(alignment: .leading, spacing: DS.Spacing.xs) {
-                Text("VibeOne")
-                    .font(DS.Typography.title)
-                    .foregroundStyle(DS.Colors.textPrimary)
-                Text(projectName)
-                    .font(DS.Typography.caption)
-                    .foregroundStyle(DS.Colors.textSecondary)
-            }
-            Spacer()
+        VStack(spacing: DS.Spacing.md) {
+            cover
+            trackInfo
+            progress
+            transport
         }
         .padding(DS.Spacing.lg)
+        .frame(width: DS.Size.cardWidth)
+        // No background: ride the genuine system popover material (like native
+        // Control Center popovers); the dark face panel supplies the contrast.
     }
 
-    private var divider: some View {
-        Rectangle()
-            .fill(DS.Colors.hairline)
-            .frame(height: 1)
-            .padding(.horizontal, DS.Spacing.lg)  // inset to match content margins
+    // MARK: - Cover
+
+    private var cover: some View {
+        FaceCover(accent: accent)
+            .frame(width: DS.Size.playerCover, height: DS.Size.playerCover)
     }
 
-    // MARK: - Footer
+    // MARK: - Track info
 
-    private var footer: some View {
-        VStack(alignment: .leading, spacing: DS.Spacing.sm) {
-            PrimaryActionButton(
-                title: launching ? "Launching…" : "Open in \(agent.title)",
-                accent: DS.Colors.accent(for: agent),
-                gradient: DS.Colors.gradient(for: agent),
-                action: triggerLaunchFeedback
-            )
-            Text(commandLine)
-                .font(DS.Typography.mono)
+    private var trackInfo: some View {
+        VStack(spacing: DS.Spacing.xs) {
+            Text(agent.title)
+                .font(DS.Typography.title)
+                .foregroundStyle(DS.Colors.textPrimary)
+            Text(projectName)
+                .font(DS.Typography.caption)
                 .foregroundStyle(DS.Colors.textSecondary)
         }
     }
 
-    private var commandLine: String {
-        "$ \(agent.binary)   (in \(projectDir))"
+    // MARK: - Progress (config sync, not playback)
+
+    private var progress: some View {
+        VStack(spacing: DS.Spacing.xs) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(DS.Colors.hairline)
+                    Capsule().fill(accent)
+                        .frame(
+                            width: geo.size.width * CGFloat(syncedDimensions)
+                                / CGFloat(totalDimensions))
+                }
+            }
+            .frame(height: DS.Size.progressBar)
+            HStack {
+                Text("config synced")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Colors.textSecondary)
+                Spacer()
+                Text("\(syncedDimensions)/\(totalDimensions)")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Colors.textSecondary)
+            }
+        }
     }
 
-    /// Light visual feedback only — NO terminal is spawned in this spike.
+    // MARK: - Transport
+
+    private var transport: some View {
+        HStack(spacing: DS.Spacing.md) {
+            TransportButton(symbol: "arrow.triangle.2.circlepath") {}  // sync now (M3)
+            TransportButton(symbol: "backward.end.fill") { switchTo(other) }
+            PlayButton(agent: agent, action: triggerLaunchFeedback)
+            TransportButton(symbol: "forward.end.fill") { switchTo(other) }
+            TransportButton(symbol: "ellipsis") {}  // more
+        }
+    }
+
+    private func switchTo(_ agent: Agent) {
+        withAnimation(DS.switchAnimation) { state.selection = agent }
+    }
+
+    /// No-op placeholder beyond a 1-second re-entry guard — NO terminal is spawned
+    /// in this UI shell. The `SessionHandoff` engine (M2) is wired in a later step,
+    /// at which point `launching` drives a real in-progress state on `PlayButton`.
     private func triggerLaunchFeedback() {
         guard !launching else { return }
-        withAnimation(.easeInOut(duration: 0.15)) { launching = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            withAnimation(.easeInOut(duration: 0.15)) { launching = false }
-        }
+        launching = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { launching = false }
     }
 }
