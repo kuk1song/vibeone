@@ -39,6 +39,12 @@ enum DS {
     enum Size {
         static let cardWidth: CGFloat = 320  // the popover content width
         static let brandMark: CGFloat = 32  // header logo tile
+
+        // "Now playing" player (ADR-006).
+        static let playerCover: CGFloat = 120  // the LED-face album cover (square)
+        static let playButton: CGFloat = 50  // centered big launch circle
+        static let transportButton: CGFloat = 32  // side icon buttons
+        static let progressBar: CGFloat = 3  // config-sync progress line height
     }
 
     // MARK: Colors (semantic roles + brand accents)
@@ -53,6 +59,11 @@ enum DS {
         /// areas read calm without killing the vibrant feel. windowBackgroundColor
         /// already flips with light/dark.
         static let surface = Color(nsColor: .windowBackgroundColor).opacity(0.4)
+
+        /// The near-black backing of the LED-dot-matrix face cover, so the lit
+        /// accent dots glow like a tiny panel regardless of light/dark. The one
+        /// non-adaptive surface — it is the "screen" the mascot lives on.
+        static let facePanel = Color(hex: 0x0C0C0E)
 
         // Brand accents (token-exact). #D97757 Claude / #10A37F Codex.
         static let accentClaude = Color(hex: 0xD97757)
@@ -98,9 +109,9 @@ enum DS {
 
     // MARK: Brand
 
-    /// The brand glyph — reused by BOTH the in-app `BrandMark` and the menu-bar
-    /// icon so the identity is unified. Lives here (nonisolated) so AppKit menu-bar
-    /// code can read it without main-actor isolation.
+    /// The wordmark glyph used by the in-app `BrandMark` tile. (The menu-bar icon
+    /// and popover cover now share the LED `FaceCover` mascot as the primary
+    /// identity — ADR-006.) Kept nonisolated so AppKit code may read it freely.
     static let brandGlyph = "music.note"
 
     // MARK: Motion
@@ -113,9 +124,10 @@ enum DS {
 //
 // Each consumes ONLY the tokens above.
 
-/// The VibeOne brand mark: a rounded-square tile with the music-note glyph on the
-/// brand gradient. The SAME glyph (`DS.brandGlyph`) is reused for the menu-bar
-/// icon so the identity is unified. `size` is the only knob.
+/// The VibeOne wordmark tile: a rounded square with the music-note glyph on the
+/// brand gradient. Reserved for a future about/settings surface — the live mascot
+/// (`FaceCover` / `MenuBarIcon`) is the primary identity now (ADR-006). `size` is
+/// the only knob.
 struct BrandMark: View {
     var size: CGFloat = DS.Size.brandMark
 
@@ -239,5 +251,47 @@ struct PrimaryActionButton: View {
         }
         .buttonStyle(.plain)
         .shadow(color: accent.opacity(0.45), radius: 10, y: 3)
+    }
+}
+
+/// The centered "play" of the transport row: a circular accent-GRADIENT button
+/// with a soft glow and a `play.fill` glyph — the round sibling of
+/// `PrimaryActionButton`. This is the primary launch action ("play" the agent).
+struct PlayButton: View {
+    var agent: Agent
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(DS.Colors.gradient(for: agent))
+                    .frame(width: DS.Size.playButton, height: DS.Size.playButton)
+                Image(systemName: "play.fill")
+                    .font(.system(size: DS.Size.playButton * 0.38, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+        }
+        .buttonStyle(.plain)
+        .shadow(color: DS.Colors.accent(for: agent).opacity(0.5), radius: 12, y: 4)
+    }
+}
+
+/// A flat secondary icon button used either side of `PlayButton` (sync / switch /
+/// more). Tappable across its full square; no fill — the play circle is the only
+/// emphasized control.
+struct TransportButton: View {
+    var symbol: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: DS.Size.transportButton * 0.42, weight: .semibold))
+                .foregroundStyle(DS.Colors.textSecondary)
+                .frame(width: DS.Size.transportButton, height: DS.Size.transportButton)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

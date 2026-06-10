@@ -14,7 +14,9 @@ import SwiftUI
 /// vibrant window chrome that `.window` style provides, which auto-adapts to
 /// light/dark and to Reduce Transparency for free. Pure SwiftUI + a one-line
 /// AppKit hook for the accessory activation policy. Zero third-party deps.
-@main
+///
+/// The entry point lives in `main.swift` (so `--render` can branch to the dev
+/// image harness before the scene starts), hence no `@main` here.
 struct VibeOneApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var state = AppState()
