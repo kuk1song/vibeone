@@ -83,21 +83,33 @@ public enum CodexSession {
 
     /// Fields the writer must synthesize for a resumable rollout (PARSERS §3).
     /// Injected generators keep tests deterministic.
+    ///
+    /// `originator` + `cliVersion` are REQUIRED for Codex to accept the rollout:
+    /// codex (v0.133) rejects a `session_meta` missing either, plus a payload-level
+    /// `timestamp`, with `does not start with session metadata`. Values are free
+    /// strings (verified on real `codex exec resume`), so we label the provenance
+    /// honestly as `vibeone`. See PARSERS §3 / memory `codex-app-surface-facts`.
     public struct WriteOptions {
         public var sessionId: String  // MUST equal the rollout file name's <id>
         public var cwd: String
         public var modelProvider: String
+        public var originator: String
+        public var cliVersion: String
         public var timestamp: () -> String
 
         public init(
             sessionId: String,
             cwd: String,
             modelProvider: String = "openai",
+            originator: String = "vibeone",
+            cliVersion: String = "0.1.0",
             timestamp: @escaping () -> String = { ISO8601DateFormatter().string(from: Date()) }
         ) {
             self.sessionId = sessionId
             self.cwd = cwd
             self.modelProvider = modelProvider
+            self.originator = originator
+            self.cliVersion = cliVersion
             self.timestamp = timestamp
         }
     }
@@ -107,19 +119,28 @@ public enum CodexSession {
     /// `response_item`/`message` per turn (user → `input_text`, assistant →
     /// `output_text`).
     ///
-    /// NOTE: the Claude→Codex direction is not yet verified end-to-end against a
-    /// real `codex resume` (no local `codex` binary at M0 — see PARSERS §4 / TASK
-    /// M0). This emits the shape observed in real rollouts and is covered by
-    /// structural + round-trip tests; live-resume verification is deferred.
+    /// NOTE: spike A (2026-06-12) verified Codex's bundled engine (v0.133)
+    /// discovers a rollout written here by id (filesystem scan, no DB row needed)
+    /// and loads/starts it via `codex exec resume`; the DB `threads` table is a
+    /// cache it self-heals. The required `session_meta` fields below were pinned by
+    /// that spike. Live-resume *content fidelity* (model reciting the handed-off
+    /// history) still needs one authed turn — same gap M0 closed for the reverse.
+    /// See PARSERS §3/§4 / TASK M0 / memory `codex-app-surface-facts`.
     public static func write(_ session: CanonicalSession, options: WriteOptions) -> String {
         var lines: [String] = []
 
         let meta: [String: Any] = [
             "type": "session_meta",
             "timestamp": options.timestamp(),
+            // Codex requires id + cwd + payload-level timestamp + originator +
+            // cli_version to accept the rollout (spike A); model_provider is kept
+            // though optional.
             "payload": [
                 "id": options.sessionId,
+                "timestamp": options.timestamp(),
                 "cwd": options.cwd,
+                "originator": options.originator,
+                "cli_version": options.cliVersion,
                 "model_provider": options.modelProvider,
             ],
         ]

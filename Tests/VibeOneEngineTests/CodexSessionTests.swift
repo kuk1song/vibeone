@@ -74,6 +74,26 @@ final class CodexSessionTests: XCTestCase {
             "output_text")
     }
 
+    /// Codex (v0.133) refuses to resume a rollout whose `session_meta` lacks a
+    /// payload-level `timestamp`, `originator`, or `cli_version` (spike A,
+    /// 2026-06-12). Guard those fields so the writer stays resumable.
+    func testWriteSessionMetaCarriesResumabilityFields() throws {
+        let session = CanonicalSession(
+            sourceAgent: "codex", workspace: "/p", model: nil,
+            messages: [.init(role: .user, text: "hi")])
+        let opts = CodexSession.WriteOptions(
+            sessionId: "sid", cwd: "/p", timestamp: { "2026-06-12T00:00:00Z" })
+
+        let first = try XCTUnwrap(
+            CodexSession.write(session, options: opts).split(separator: "\n").map(String.init).first
+        )
+        let payload = try XCTUnwrap((try json(first))["payload"] as? [String: Any])
+
+        XCTAssertEqual(payload["timestamp"] as? String, "2026-06-12T00:00:00Z")
+        XCTAssertEqual(payload["originator"] as? String, "vibeone")
+        XCTAssertEqual(payload["cli_version"] as? String, "0.1.0")
+    }
+
     func testWriteOmitsTurnContextWhenNoModel() {
         let session = CanonicalSession(
             sourceAgent: "codex", workspace: "/p", model: nil,
