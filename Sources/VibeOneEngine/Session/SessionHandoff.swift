@@ -3,9 +3,15 @@ import Foundation
 /// The "switch": take a project's in-flight conversation in one agent and write
 /// it as a native, resumable session in the other (ARCHITECTURE §4.1).
 ///
-/// v0 implements the M0-verified direction **Codex → Claude** end to end. The
-/// reverse (Claude → Codex) reuses `CodexSession.write` but stays gated on a
-/// local `codex` binary for live-resume verification (PARSERS §4 / TASK M0).
+/// Both directions are implemented: `codexToClaude` (M0-verified end to end) and
+/// `claudeToCodex` (spike A verified Codex's bundled engine v0.133 discovers and
+/// resumes an externally-written rollout by id — no SQLite write; one authed turn
+/// for content fidelity is still pending — PARSERS §4 / TASK M0).
+///
+/// Writing the file (the handoff) is decoupled from launching the target surface:
+/// `Result.resumeCommand` is the CLI form, and a Desktop App / IDE launch is a
+/// separate strategy chosen by the caller (ARCHITECTURE §4.1) — e.g. Codex's
+/// Desktop App opens via `codex://threads/<id>`.
 ///
 /// Invariant: the handoff only ever *creates* a new target session; it never
 /// mutates the source file.
@@ -63,6 +69,75 @@ public enum SessionHandoff {
             resumeCommand: "claude --resume \(sessionId)",
             messageCount: ir.messages.count,
             backup: backup)
+    }
+
+    /// Locate the most recent Claude transcript for `workspace`, convert it, and
+    /// write a resumable Codex rollout under `~/.codex/sessions/<YYYY>/<MM>/<DD>/`.
+    /// The reverse of `codexToClaude`.
+    ///
+    /// `now` is injected for deterministic tests; it drives both the in-file UTC
+    /// timestamps and the local-time date path (`SessionLocation.codexRolloutURL`).
+    /// `CodexSession.write` supplies the `session_meta` fields Codex requires to
+    /// accept the rollout (PARSERS §3, pinned by spike A).
+    public static func claudeToCodex(
+        workspace: String,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        makeSessionId: () -> String = { UUID().uuidString },
+        now: () -> Date = { Date() }
+    ) throws -> Result {
+        guard let source = latestClaudeSession(home: home, workspace: workspace) else {
+            throw Failure.noSessionFound
+        }
+        let ir = ClaudeSession.read(jsonl: try String(contentsOf: source, encoding: .utf8))
+        guard !ir.messages.isEmpty else { throw Failure.emptySession }
+
+        let sessionId = makeSessionId()
+        let date = now()
+        let iso = ISO8601DateFormatter().string(from: date)
+        let target = SessionLocation.codexRolloutURL(
+            home: home, date: date, sessionId: sessionId)
+        let jsonl = CodexSession.write(
+            ir,
+            options: .init(sessionId: sessionId, cwd: workspace, timestamp: { iso }))
+
+        let backup = try AtomicFile.backup(target, timestamp: iso)
+        try AtomicFile.write(jsonl, to: target)
+
+        return Result(
+            targetAgent: "codex",
+            sessionId: sessionId,
+            path: target,
+            resumeCommand: "codex resume \(sessionId)",
+            messageCount: ir.messages.count,
+            backup: backup)
+    }
+
+    /// Newest Claude transcript for `workspace`, or nil. The encoded project dir
+    /// (`~/.claude/projects/<encoded-cwd>/`) already scopes to one workspace, so
+    /// this just returns the newest `.jsonl` in it by modification time.
+    public static func latestClaudeSession(home: URL, workspace: String) -> URL? {
+        let fm = FileManager.default
+        let dir = SessionLocation.claudeProjectsDir(home: home)
+            .appendingPathComponent(
+                SessionLocation.claudeProjectDirName(forWorkspace: workspace),
+                isDirectory: true)
+        guard
+            let entries = try? fm.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: [.contentModificationDateKey])
+        else { return nil }
+
+        return
+            entries
+            .filter { $0.pathExtension == "jsonl" }
+            .map {
+                (
+                    url: $0,
+                    modified: (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?
+                        .contentModificationDate ?? .distantPast
+                )
+            }
+            .sorted { $0.modified > $1.modified }
+            .first?.url
     }
 
     /// Newest Codex rollout whose `session_meta.cwd` matches `workspace`, or nil.

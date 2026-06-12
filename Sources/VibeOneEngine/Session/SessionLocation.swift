@@ -28,4 +28,30 @@ public enum SessionLocation {
     public static func codexSessionsDir(home: URL) -> URL {
         home.appendingPathComponent(".codex/sessions", isDirectory: true)
     }
+
+    /// `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<YYYY-MM-DDTHH-MM-SS>-<id>.jsonl`.
+    ///
+    /// Codex discovers a rollout by its `<id>` (filesystem scan — spike A), so the
+    /// date bucket isn't load-bearing; we still mirror the native layout so a
+    /// hand-written rollout is indistinguishable from a Codex-authored one. The
+    /// date dir + filename stamp use the **local** time zone (verified on real
+    /// data: a `17-50-03` filename for a `15:50:03Z` session); the in-file
+    /// timestamps stay UTC. The `<id>` MUST equal the `session_meta.payload.id`.
+    public static func codexRolloutURL(home: URL, date: Date, sessionId: String) -> URL {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let c = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second], from: date)
+        let pad2 = { (n: Int) in String(format: "%02d", n) }
+        let year = String(format: "%04d", c.year ?? 0)
+        let month = pad2(c.month ?? 0)
+        let day = pad2(c.day ?? 0)
+        let stamp =
+            "\(year)-\(month)-\(day)T\(pad2(c.hour ?? 0))-\(pad2(c.minute ?? 0))-\(pad2(c.second ?? 0))"
+        return codexSessionsDir(home: home)
+            .appendingPathComponent(year, isDirectory: true)
+            .appendingPathComponent(month, isDirectory: true)
+            .appendingPathComponent(day, isDirectory: true)
+            .appendingPathComponent("rollout-\(stamp)-\(sessionId).jsonl")
+    }
 }
