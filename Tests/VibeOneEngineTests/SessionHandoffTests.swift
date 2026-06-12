@@ -16,6 +16,29 @@ final class SessionLocationTests: XCTestCase {
             home: home, workspace: "/Users/kuki/proj", sessionId: "abc")
         XCTAssertEqual(url.path, "/home/.claude/projects/-Users-kuki-proj/abc.jsonl")
     }
+
+    func testCodexRolloutURLNestsByDateAndNamesNatively() {
+        let home = URL(fileURLWithPath: "/home")
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let url = SessionLocation.codexRolloutURL(home: home, date: date, sessionId: "abc")
+
+        // Date dir + filename stamp use the local zone (matching real Codex);
+        // re-derive the expected values the same way so the test is tz-independent.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let c = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second], from: date)
+        let pad2 = { (n: Int) in String(format: "%02d", n) }
+        let year = String(format: "%04d", c.year!)
+        let month = pad2(c.month!)
+        let day = pad2(c.day!)
+        let stamp =
+            "\(year)-\(month)-\(day)T\(pad2(c.hour!))-\(pad2(c.minute!))-\(pad2(c.second!))"
+
+        XCTAssertEqual(
+            url.deletingLastPathComponent().path, "/home/.codex/sessions/\(year)/\(month)/\(day)")
+        XCTAssertEqual(url.lastPathComponent, "rollout-\(stamp)-abc.jsonl")
+    }
 }
 
 final class SessionHandoffTests: XCTestCase {
