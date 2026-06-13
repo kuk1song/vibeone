@@ -115,17 +115,19 @@ public enum CodexSession {
     }
 
     /// Render a canonical session as a Codex rollout `.jsonl`: a `session_meta`
-    /// header, an optional `turn_context` carrying the model, then one
-    /// `response_item`/`message` per turn (user → `input_text`, assistant →
-    /// `output_text`).
+    /// header, an optional `turn_context` carrying the model, then EACH turn in
+    /// BOTH streams Codex keeps — a `response_item`/`message` (the model-API
+    /// history; user → `input_text`, assistant → `output_text`) and an `event_msg`
+    /// (`user_message`/`agent_message`), which the Codex app renders the thread and
+    /// its list preview from.
     ///
-    /// NOTE: spike A (2026-06-12) verified Codex's bundled engine (v0.133)
-    /// discovers a rollout written here by id (filesystem scan, no DB row needed)
-    /// and loads/starts it via `codex exec resume`; the DB `threads` table is a
-    /// cache it self-heals. The required `session_meta` fields below were pinned by
-    /// that spike. Live-resume *content fidelity* (model reciting the handed-off
-    /// history) still needs one authed turn — same gap M0 closed for the reverse.
-    /// See PARSERS §3/§4 / TASK M0 / memory `codex-app-surface-facts`.
+    /// NOTE: Codex discovers a rollout written here by id (filesystem scan) and
+    /// indexes it into its `threads` store on open — verified on Codex 26.609,
+    /// which keys threads in `~/.codex/sqlite/state_5.sqlite` (`rollout_path` +
+    /// `cwd`). The `session_meta` resumability fields below are required; writing
+    /// only `response_item` (no `event_msg`) still ingests the thread but renders
+    /// it EMPTY in the UI, which is why both streams are emitted. See PARSERS §2/§3
+    /// / memory `codex-app-surface-facts`.
     public static func write(_ session: CanonicalSession, options: WriteOptions) -> String {
         var lines: [String] = []
 
@@ -155,25 +157,62 @@ public enum CodexSession {
             appendLine(turnContext, to: &lines)
         }
 
+        // Each turn is written to BOTH streams Codex keeps: the `response_item`
+        // model-API history (what a resumed model re-reads as context) AND the
+        // `event_msg` UI stream the Codex app renders the thread + list preview
+        // from. response_item alone ingests the thread but shows it EMPTY in the UI
+        // (verified on Codex 26.609).
         for msg in session.messages {
-            let (role, partType): (String, String)
             switch msg.role {
-            case .assistant: (role, partType) = ("assistant", "output_text")
-            case .user, .tool: (role, partType) = ("user", "input_text")
+            case .user, .tool:
+                appendLine(
+                    eventMessage("user_message", text: msg.text, timestamp: options.timestamp()),
+                    to: &lines)
+                appendLine(
+                    responseMessage(
+                        role: "user", partType: "input_text", text: msg.text,
+                        timestamp: options.timestamp()),
+                    to: &lines)
+            case .assistant:
+                appendLine(
+                    responseMessage(
+                        role: "assistant", partType: "output_text", text: msg.text,
+                        timestamp: options.timestamp()),
+                    to: &lines)
+                appendLine(
+                    eventMessage("agent_message", text: msg.text, timestamp: options.timestamp()),
+                    to: &lines)
             }
-            let item: [String: Any] = [
-                "type": "response_item",
-                "timestamp": options.timestamp(),
-                "payload": [
-                    "type": "message",
-                    "role": role,
-                    "content": [["type": partType, "text": msg.text]],
-                ],
-            ]
-            appendLine(item, to: &lines)
         }
 
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// A `response_item` conversation line — the model-API history (PARSERS §2).
+    private static func responseMessage(
+        role: String, partType: String, text: String, timestamp: String
+    ) -> [String: Any] {
+        [
+            "type": "response_item",
+            "timestamp": timestamp,
+            "payload": [
+                "type": "message",
+                "role": role,
+                "content": [["type": partType, "text": text]],
+            ],
+        ]
+    }
+
+    /// An `event_msg` UI line (`user_message`/`agent_message`) — what the Codex app
+    /// renders the thread and its list preview from (PARSERS §2).
+    private static func eventMessage(
+        _ type: String, text: String, timestamp: String
+    ) -> [String: Any] {
+        [
+            "type": "event_msg",
+            "timestamp": timestamp,
+            "payload": ["type": type, "message": text],
+        ]
     }
 
     private static func appendLine(_ obj: [String: Any], to lines: inout [String]) {
