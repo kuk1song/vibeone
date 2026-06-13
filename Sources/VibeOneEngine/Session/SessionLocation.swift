@@ -5,9 +5,13 @@ import Foundation
 public enum SessionLocation {
 
     /// Claude derives a project directory name from a workspace path by replacing
-    /// every `/` with `-` (so `/Users/kuki/proj` → `-Users-kuki-proj`).
+    /// **every non-alphanumeric character** with `-` (official Agent SDK docs), so
+    /// `/Users/kuki/proj` → `-Users-kuki-proj` and `/Users/kuki/Material_Song` →
+    /// `-Users-kuki-Material-Song`. The mapping is lossy/non-invertible — used only
+    /// to place a *written* session under a known cwd; never decode a dir name back
+    /// (read the cwd from the transcript instead, PARSERS §1).
     public static func claudeProjectDirName(forWorkspace workspace: String) -> String {
-        workspace.replacingOccurrences(of: "/", with: "-")
+        String(workspace.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
     }
 
     public static func claudeProjectsDir(home: URL) -> URL {

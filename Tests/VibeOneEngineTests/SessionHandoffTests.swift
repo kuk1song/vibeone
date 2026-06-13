@@ -10,6 +10,20 @@ final class SessionLocationTests: XCTestCase {
             "-Users-kuki-proj")
     }
 
+    func testEncodesEveryNonAlphanumericCharToDash() {
+        // Claude's encoding replaces every non-alphanumeric char with `-` (official
+        // Agent SDK docs), not just `/` — so `.`, `_`, and spaces collapse too.
+        XCTAssertEqual(
+            SessionLocation.claudeProjectDirName(forWorkspace: "/Users/kuki/Material_Song"),
+            "-Users-kuki-Material-Song")
+        XCTAssertEqual(
+            SessionLocation.claudeProjectDirName(forWorkspace: "/Users/kuki/.slock"),
+            "-Users-kuki--slock")
+        XCTAssertEqual(
+            SessionLocation.claudeProjectDirName(forWorkspace: "/a b/c.d"),
+            "-a-b-c-d")
+    }
+
     func testClaudeSessionURLNestsUnderEncodedProjectDir() {
         let home = URL(fileURLWithPath: "/home")
         let url = SessionLocation.claudeSessionURL(
@@ -87,7 +101,7 @@ final class SessionHandoffTests: XCTestCase {
 
         let result = try SessionHandoff.codexToClaude(
             workspace: workspace, home: home,
-            makeSessionId: { "fixed-uuid" }, timestamp: { "2026-06-06T00:00:00Z" })
+            makeSessionId: { "fixed-uuid" }, now: { Date(timeIntervalSince1970: 0) })
 
         XCTAssertEqual(result.targetAgent, "claude")
         XCTAssertEqual(result.sessionId, "fixed-uuid")
@@ -125,7 +139,8 @@ final class SessionHandoffTests: XCTestCase {
         XCTAssertEqual(located.lastPathComponent, "rollout-new.jsonl")
 
         let result = try SessionHandoff.codexToClaude(
-            workspace: workspace, home: home, makeSessionId: { "u" }, timestamp: { "t" })
+            workspace: workspace, home: home, makeSessionId: { "u" },
+            now: { Date(timeIntervalSince1970: 0) })
         XCTAssertEqual(
             ClaudeSession.read(jsonl: try String(contentsOf: result.path, encoding: .utf8))
                 .messages.map(\.text), ["fresh"])
@@ -135,7 +150,7 @@ final class SessionHandoffTests: XCTestCase {
         XCTAssertThrowsError(
             try SessionHandoff.codexToClaude(
                 workspace: "/Users/kuki/proj", home: home,
-                makeSessionId: { "u" }, timestamp: { "t" })
+                makeSessionId: { "u" }, now: { Date(timeIntervalSince1970: 0) })
         ) { error in
             XCTAssertEqual(error as? SessionHandoff.Failure, .noSessionFound)
         }
@@ -238,5 +253,84 @@ final class SessionHandoffTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? SessionHandoff.Failure, .noSessionFound)
         }
+    }
+
+    // MARK: - Current session (which session am I in right now)
+
+    func testCurrentClaudeSessionPicksGloballyNewestAcrossProjects() throws {
+        try writeClaudeSession(
+            workspace: "/Users/kuki/proj-a", id: "a",
+            messages: [(.user, "in a")], modified: Date(timeIntervalSince1970: 1000))
+        try writeClaudeSession(
+            workspace: "/Users/kuki/proj-b", id: "b",
+            messages: [(.user, "in b")], modified: Date(timeIntervalSince1970: 3000))
+
+        let current = try XCTUnwrap(SessionHandoff.currentClaudeSession(home: home))
+        XCTAssertEqual(current.workspace, "/Users/kuki/proj-b")
+        XCTAssertEqual(current.path.lastPathComponent, "b.jsonl")
+    }
+
+    func testCurrentClaudeSessionResolvesWorkspaceFromFileNotDirName() throws {
+        // The project path itself contains a dash; decoding the encoded dir name
+        // (slashes -> dashes) would be ambiguous, so the workspace MUST be read
+        // from the transcript's recorded cwd, not reconstructed from the dir.
+        try writeClaudeSession(
+            workspace: "/Users/kuki/slash-stage", id: "only",
+            messages: [(.user, "hi")], modified: Date(timeIntervalSince1970: 2000))
+
+        let current = try XCTUnwrap(SessionHandoff.currentClaudeSession(home: home))
+        XCTAssertEqual(current.workspace, "/Users/kuki/slash-stage")
+    }
+
+    func testCurrentClaudeSessionNilWhenNoSessions() {
+        XCTAssertNil(SessionHandoff.currentClaudeSession(home: home))
+    }
+
+    func testClaudeToCodexUsesExplicitSourceOverLatest() throws {
+        let workspace = "/Users/kuki/proj"
+        let older = try writeClaudeSession(
+            workspace: workspace, id: "older",
+            messages: [(.user, "older session")], modified: Date(timeIntervalSince1970: 1000))
+        try writeClaudeSession(
+            workspace: workspace, id: "newer",
+            messages: [(.user, "newer session")], modified: Date(timeIntervalSince1970: 9000))
+
+        // An explicit source is handed off verbatim, bypassing "latest by mtime"
+        // (and Claude's lossy dir encoding) — this is the path the UI uses.
+        let result = try SessionHandoff.claudeToCodex(
+            workspace: workspace, source: older, home: home,
+            makeSessionId: { "u" }, now: { Date(timeIntervalSince1970: 0) })
+        XCTAssertEqual(
+            CodexSession.read(jsonl: try String(contentsOf: result.path, encoding: .utf8))
+                .messages.map(\.text), ["older session"])
+    }
+
+    func testClaudeToCodexGeneratesLowercaseSessionId() throws {
+        let workspace = "/Users/kuki/proj"
+        try writeClaudeSession(
+            workspace: workspace, id: "src",
+            messages: [(.user, "hi")], modified: Date(timeIntervalSince1970: 1000))
+        // No injected makeSessionId -> exercises the real default, which must emit
+        // a lowercase id to match native Codex rollouts (lookup is case-sensitive).
+        let result = try SessionHandoff.claudeToCodex(workspace: workspace, home: home)
+        XCTAssertFalse(result.sessionId.isEmpty)
+        XCTAssertEqual(result.sessionId, result.sessionId.lowercased())
+    }
+
+    /// Read-only proof against this machine's real `~/.claude/projects`: the
+    /// locator must return an existing transcript with an absolute cwd. Skips on a
+    /// machine with no Claude sessions.
+    func testCurrentClaudeSessionDetectsRealSessionIfPresent() throws {
+        guard let current = SessionHandoff.currentClaudeSession() else {
+            throw XCTSkip("no ~/.claude session on this machine")
+        }
+        XCTAssertEqual(current.path.pathExtension, "jsonl")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: current.path.path),
+            "located session file should exist")
+        XCTAssertTrue(current.workspace.hasPrefix("/"), "should recover an absolute cwd")
+        print(
+            "[real-data] current claude session: \(current.path.lastPathComponent) · "
+                + "workspace=\(current.workspace)")
     }
 }
