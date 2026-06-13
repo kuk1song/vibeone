@@ -48,7 +48,9 @@ final class CodexSessionTests: XCTestCase {
 
         let lines = CodexSession.write(session, options: opts)
             .split(separator: "\n").map(String.init)
-        XCTAssertEqual(lines.count, 4, "session_meta + turn_context + 2 messages")
+        // meta + turn_context, then per turn BOTH streams: user = event_msg +
+        // response_item, assistant = response_item + event_msg.
+        XCTAssertEqual(lines.count, 6, "session_meta + turn_context + 2 turns x 2 streams")
 
         let meta = try json(lines[0])
         XCTAssertEqual(meta["type"] as? String, "session_meta")
@@ -60,18 +62,60 @@ final class CodexSessionTests: XCTestCase {
         XCTAssertEqual(turn["type"] as? String, "turn_context")
         XCTAssertEqual((turn["payload"] as? [String: Any])?["model"] as? String, "gpt-5.4")
 
-        let userItem = try json(lines[2])
+        // user turn: event_msg(user_message) then response_item(message/user).
+        let userEvent = try json(lines[2])
+        XCTAssertEqual(userEvent["type"] as? String, "event_msg")
+        XCTAssertEqual((userEvent["payload"] as? [String: Any])?["type"] as? String, "user_message")
+        XCTAssertEqual((userEvent["payload"] as? [String: Any])?["message"] as? String, "Hello")
+
+        let userItem = try json(lines[3])
         let userPayload = try XCTUnwrap(userItem["payload"] as? [String: Any])
         XCTAssertEqual(userPayload["role"] as? String, "user")
         let userPart = try XCTUnwrap((userPayload["content"] as? [[String: Any]])?.first)
         XCTAssertEqual(userPart["type"] as? String, "input_text")
         XCTAssertEqual(userPart["text"] as? String, "Hello")
 
-        let asstPayload = try XCTUnwrap((try json(lines[3]))["payload"] as? [String: Any])
+        // assistant turn: response_item(message/assistant) then event_msg(agent_message).
+        let asstPayload = try XCTUnwrap((try json(lines[4]))["payload"] as? [String: Any])
         XCTAssertEqual(asstPayload["role"] as? String, "assistant")
         XCTAssertEqual(
             ((asstPayload["content"] as? [[String: Any]])?.first)?["type"] as? String,
             "output_text")
+
+        let asstEventPayload = try XCTUnwrap((try json(lines[5]))["payload"] as? [String: Any])
+        XCTAssertEqual(asstEventPayload["type"] as? String, "agent_message")
+        XCTAssertEqual(asstEventPayload["message"] as? String, "Hi there")
+    }
+
+    func testWriteEmitsEventMsgStreamForUI() throws {
+        // Codex's UI + thread list render from the event_msg stream, not the
+        // response_item model history — so both user_message and agent_message must
+        // be emitted or the thread shows up empty (verified on Codex 26.609).
+        let session = CanonicalSession(
+            sourceAgent: "codex", workspace: "/p", model: nil,
+            messages: [
+                .init(role: .user, text: "hi there"),
+                .init(role: .assistant, text: "hello back"),
+            ])
+        let lines = CodexSession.write(
+            session, options: .init(sessionId: "id", cwd: "/p", timestamp: { "t" })
+        ).split(separator: "\n").map(String.init)
+
+        var userMsg: String?
+        var agentMsg: String?
+        for line in lines {
+            let obj = try json(line)
+            guard obj["type"] as? String == "event_msg",
+                let p = obj["payload"] as? [String: Any]
+            else { continue }
+            switch p["type"] as? String {
+            case "user_message": userMsg = p["message"] as? String
+            case "agent_message": agentMsg = p["message"] as? String
+            default: break
+            }
+        }
+        XCTAssertEqual(userMsg, "hi there")
+        XCTAssertEqual(agentMsg, "hello back")
     }
 
     /// Codex (v0.133) refuses to resume a rollout whose `session_meta` lacks a
@@ -101,7 +145,9 @@ final class CodexSessionTests: XCTestCase {
         let lines = CodexSession.write(
             session, options: .init(sessionId: "id", cwd: "/p", timestamp: { "t" })
         ).split(separator: "\n").map(String.init)
-        XCTAssertEqual(lines.count, 2, "session_meta + 1 message; no turn_context without a model")
+        XCTAssertEqual(
+            lines.count, 3,
+            "session_meta + 1 turn (event_msg + response_item); no turn_context without a model")
     }
 
     // MARK: Round-trip (the core invariant)

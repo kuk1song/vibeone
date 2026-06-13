@@ -3,15 +3,17 @@ import Foundation
 /// The "switch": take a project's in-flight conversation in one agent and write
 /// it as a native, resumable session in the other (ARCHITECTURE §4.1).
 ///
-/// Both directions are implemented: `codexToClaude` (M0-verified end to end) and
-/// `claudeToCodex` (spike A verified Codex's bundled engine v0.133 discovers and
-/// resumes an externally-written rollout by id — no SQLite write; one authed turn
-/// for content fidelity is still pending — PARSERS §4 / TASK M0).
+/// This is the **domain core** (ADR-007): `handoff` orchestrates
+/// `from.read → IR → to.write` against the `SessionStore` **port** and never
+/// touches an agent's concrete storage format — the `ClaudeSessionStore` /
+/// `CodexSessionStore` adapters do, so an upstream change is contained to one
+/// adapter. The `codexToClaude` / `claudeToCodex` entry points are the thin
+/// composition root that picks which adapter is source vs target.
 ///
-/// Writing the file (the handoff) is decoupled from launching the target surface:
-/// `Result.resumeCommand` is the CLI form, and a Desktop App / IDE launch is a
-/// separate strategy chosen by the caller (ARCHITECTURE §4.1) — e.g. Codex's
-/// Desktop App opens via `codex://threads/<id>`.
+/// "Hand off" (writing the file) is decoupled from launching the target surface:
+/// `Result.resumeCommand` is the CLI form; opening a Desktop App / IDE is a
+/// separate `AgentLauncher` step chosen by the caller (ARCHITECTURE §4.1,
+/// ADR-009).
 ///
 /// Invariant: the handoff only ever *creates* a new target session; it never
 /// mutates the source file.
@@ -35,6 +37,39 @@ public enum SessionHandoff {
         case emptySession
     }
 
+    /// A located session plus the real project path it belongs to — what the UI
+    /// needs to display the project and drive the handoff.
+    public struct CurrentSession: Equatable, Sendable {
+        public var path: URL
+        public var workspace: String
+
+        public init(path: URL, workspace: String) {
+            self.path = path
+            self.workspace = workspace
+        }
+    }
+
+    // MARK: - Core (port-only orchestration)
+
+    /// Convert one located session in `from` into a new resumable session in `to`.
+    /// Pure orchestration over the `SessionStore` port — zero agent specifics.
+    static func handoff(
+        source: URL, from: SessionStore, to: SessionStore, sessionId: String, now: Date
+    ) throws -> Result {
+        let ir = try from.read(source)
+        guard !ir.messages.isEmpty else { throw Failure.emptySession }
+        let written = try to.write(ir, sessionId: sessionId, now: now)
+        return Result(
+            targetAgent: to.agent,
+            sessionId: written.sessionId,
+            path: written.path,
+            resumeCommand: written.resumeCommand,
+            messageCount: ir.messages.count,
+            backup: written.backup)
+    }
+
+    // MARK: - Directions (composition root: which adapter is source vs target)
+
     /// Locate the most recent Codex rollout for `workspace`, convert it, and write
     /// a resumable Claude transcript under `~/.claude/projects/<encoded-cwd>/`.
     ///
@@ -43,141 +78,61 @@ public enum SessionHandoff {
     public static func codexToClaude(
         workspace: String,
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
-        makeSessionId: () -> String = { UUID().uuidString },
-        timestamp: @escaping () -> String = { ISO8601DateFormatter().string(from: Date()) }
+        makeSessionId: () -> String = { UUID().uuidString.lowercased() },
+        now: () -> Date = { Date() }
     ) throws -> Result {
-        guard let source = latestCodexSession(home: home, workspace: workspace) else {
+        let from = CodexSessionStore(home: home)
+        let to = ClaudeSessionStore(home: home)
+        guard let source = from.latestSession(workspace: workspace) else {
             throw Failure.noSessionFound
         }
-        let ir = CodexSession.read(jsonl: try String(contentsOf: source, encoding: .utf8))
-        guard !ir.messages.isEmpty else { throw Failure.emptySession }
-
-        let sessionId = makeSessionId()
-        let target = SessionLocation.claudeSessionURL(
-            home: home, workspace: workspace, sessionId: sessionId)
-        let jsonl = ClaudeSession.write(
-            ir,
-            options: .init(sessionId: sessionId, cwd: workspace, timestamp: timestamp))
-
-        let backup = try AtomicFile.backup(target, timestamp: timestamp())
-        try AtomicFile.write(jsonl, to: target)
-
-        return Result(
-            targetAgent: "claude",
-            sessionId: sessionId,
-            path: target,
-            resumeCommand: "claude --resume \(sessionId)",
-            messageCount: ir.messages.count,
-            backup: backup)
+        return try handoff(
+            source: source, from: from, to: to, sessionId: makeSessionId(), now: now())
     }
 
     /// Locate the most recent Claude transcript for `workspace`, convert it, and
     /// write a resumable Codex rollout under `~/.codex/sessions/<YYYY>/<MM>/<DD>/`.
     /// The reverse of `codexToClaude`.
     ///
-    /// `now` is injected for deterministic tests; it drives both the in-file UTC
-    /// timestamps and the local-time date path (`SessionLocation.codexRolloutURL`).
-    /// `CodexSession.write` supplies the `session_meta` fields Codex requires to
-    /// accept the rollout (PARSERS §3, pinned by spike A).
+    /// `source` is the exact transcript to hand off; when nil it falls back to the
+    /// newest in `workspace`. Callers that already located the session (e.g. via
+    /// `currentClaudeSession`) should pass it — that path is exact, whereas finding
+    /// by `workspace` round-trips through Claude's lossy dir encoding (every
+    /// non-alphanumeric char maps to `-`, PARSERS §1), which only resolves for
+    /// paths without such characters.
     public static func claudeToCodex(
         workspace: String,
+        source: URL? = nil,
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
-        makeSessionId: () -> String = { UUID().uuidString },
+        makeSessionId: () -> String = { UUID().uuidString.lowercased() },
         now: () -> Date = { Date() }
     ) throws -> Result {
-        guard let source = latestClaudeSession(home: home, workspace: workspace) else {
+        let from = ClaudeSessionStore(home: home)
+        let to = CodexSessionStore(home: home)
+        guard let source = source ?? from.latestSession(workspace: workspace) else {
             throw Failure.noSessionFound
         }
-        let ir = ClaudeSession.read(jsonl: try String(contentsOf: source, encoding: .utf8))
-        guard !ir.messages.isEmpty else { throw Failure.emptySession }
-
-        let sessionId = makeSessionId()
-        let date = now()
-        let iso = ISO8601DateFormatter().string(from: date)
-        let target = SessionLocation.codexRolloutURL(
-            home: home, date: date, sessionId: sessionId)
-        let jsonl = CodexSession.write(
-            ir,
-            options: .init(sessionId: sessionId, cwd: workspace, timestamp: { iso }))
-
-        let backup = try AtomicFile.backup(target, timestamp: iso)
-        try AtomicFile.write(jsonl, to: target)
-
-        return Result(
-            targetAgent: "codex",
-            sessionId: sessionId,
-            path: target,
-            resumeCommand: "codex resume \(sessionId)",
-            messageCount: ir.messages.count,
-            backup: backup)
+        return try handoff(
+            source: source, from: from, to: to, sessionId: makeSessionId(), now: now())
     }
 
-    /// Newest Claude transcript for `workspace`, or nil. The encoded project dir
-    /// (`~/.claude/projects/<encoded-cwd>/`) already scopes to one workspace, so
-    /// this just returns the newest `.jsonl` in it by modification time.
+    // MARK: - Locators (thin wrappers over the adapters)
+
+    /// Newest Claude transcript for `workspace`, or nil.
     public static func latestClaudeSession(home: URL, workspace: String) -> URL? {
-        let fm = FileManager.default
-        let dir = SessionLocation.claudeProjectsDir(home: home)
-            .appendingPathComponent(
-                SessionLocation.claudeProjectDirName(forWorkspace: workspace),
-                isDirectory: true)
-        guard
-            let entries = try? fm.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: [.contentModificationDateKey])
-        else { return nil }
-
-        return
-            entries
-            .filter { $0.pathExtension == "jsonl" }
-            .map {
-                (
-                    url: $0,
-                    modified: (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?
-                        .contentModificationDate ?? .distantPast
-                )
-            }
-            .sorted { $0.modified > $1.modified }
-            .first?.url
+        ClaudeSessionStore(home: home).latestSession(workspace: workspace)
     }
 
-    /// Newest Codex rollout whose `session_meta.cwd` matches `workspace`, or nil.
-    /// Scans `~/.codex/sessions/**`, sorts by modification time (newest first),
-    /// and returns the first whose recorded cwd matches.
+    /// Newest Codex rollout whose recorded cwd matches `workspace`, or nil.
     public static func latestCodexSession(home: URL, workspace: String) -> URL? {
-        let fm = FileManager.default
-        let root = SessionLocation.codexSessionsDir(home: home)
-        guard
-            let enumerator = fm.enumerator(
-                at: root, includingPropertiesForKeys: [.contentModificationDateKey])
-        else { return nil }
-
-        var candidates: [(url: URL, modified: Date)] = []
-        for case let url as URL in enumerator
-        where url.lastPathComponent.hasPrefix("rollout-") && url.pathExtension == "jsonl" {
-            let modified =
-                (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-                .contentModificationDate ?? .distantPast
-            candidates.append((url, modified))
-        }
-
-        for (url, _) in candidates.sorted(by: { $0.modified > $1.modified })
-        where workspaceOfRollout(url) == workspace {
-            return url
-        }
-        return nil
+        CodexSessionStore(home: home).latestSession(workspace: workspace)
     }
 
-    /// Read just the `session_meta` (first line) of a rollout for its `cwd`.
-    private static func workspaceOfRollout(_ url: URL) -> String? {
-        guard let content = try? String(contentsOf: url, encoding: .utf8),
-            let firstLine = content.split(
-                separator: "\n", maxSplits: 1, omittingEmptySubsequences: true
-            ).first,
-            let obj = try? JSONSerialization.jsonObject(with: Data(firstLine.utf8))
-                as? [String: Any],
-            (obj["type"] as? String) == "session_meta",
-            let payload = obj["payload"] as? [String: Any]
-        else { return nil }
-        return payload["cwd"] as? String
+    /// The Claude session the user is most likely working in right now (globally
+    /// newest transcript across all projects). See `ClaudeSessionStore.currentSession`.
+    public static func currentClaudeSession(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> CurrentSession? {
+        ClaudeSessionStore(home: home).currentSession()
     }
 }
