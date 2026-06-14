@@ -15,6 +15,19 @@ struct NamedSession: CustomTestStringConvertible, Sendable {
     var testDescription: String { name }
 }
 
+/// Write `contents` to a `.jsonl` in a unique temp dir, run `body` with its URL,
+/// then delete the dir. The unique dir makes this safe under Swift Testing's
+/// default parallelism — no `.serialized` needed.
+func withTempSession(_ contents: String, _ body: (URL) throws -> Void) throws {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("vibeone-read-\(ProcessInfo.processInfo.globallyUniqueString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appendingPathComponent("session.jsonl")
+    try contents.write(to: url, atomically: true, encoding: .utf8)
+    try body(url)
+}
+
 /// Genuine sessions on *this* machine, surfaced one file per case. CI machines
 /// have neither directory, so the owning `@Test` is `.enabled(if:)`-gated on a
 /// non-empty list and is reported as skipped there — never a failure.

@@ -19,7 +19,9 @@ public protocol SessionStore: Sendable {
     func latestSession(workspace: String) -> URL?
 
     /// Parse a native session file into the canonical IR. Throws if the file can't
-    /// be read; an unparseable body yields an empty session (the caller guards).
+    /// be read, and — as defense-in-depth at this boundary (ADR-010) — throws
+    /// `SessionReadError` rather than returning a silently-empty IR when no
+    /// workspace or no conversation can be recovered (the signal of format drift).
     func read(_ url: URL) throws -> CanonicalSession
 
     /// Write `session` as a NEW native, resumable session identified by `sessionId`

@@ -57,6 +57,9 @@ public enum SessionHandoff {
         source: URL, from: SessionStore, to: SessionStore, sessionId: String, now: Date
     ) throws -> Result {
         let ir = try from.read(source)
+        // Backstop: the built-in adapters already reject an empty parse at their
+        // read boundary (SessionReadError, ADR-010); this keeps the invariant at
+        // the orchestration layer too, for any SessionStore that doesn't validate.
         guard !ir.messages.isEmpty else { throw Failure.emptySession }
         let written = try to.write(ir, sessionId: sessionId, now: now)
         return Result(
