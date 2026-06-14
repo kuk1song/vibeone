@@ -13,7 +13,8 @@ public struct ClaudeSessionStore: SessionStore {
     }
 
     public func read(_ url: URL) throws -> CanonicalSession {
-        ClaudeSession.read(jsonl: try String(contentsOf: url, encoding: .utf8))
+        let ir = ClaudeSession.read(jsonl: try String(contentsOf: url, encoding: .utf8))
+        return try ir.validated(agent: agent, source: url)
     }
 
     public func write(

@@ -14,7 +14,8 @@ public struct CodexSessionStore: SessionStore {
     }
 
     public func read(_ url: URL) throws -> CanonicalSession {
-        CodexSession.read(jsonl: try String(contentsOf: url, encoding: .utf8))
+        let ir = CodexSession.read(jsonl: try String(contentsOf: url, encoding: .utf8))
+        return try ir.validated(agent: agent, source: url)
     }
 
     public func write(
