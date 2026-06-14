@@ -95,10 +95,10 @@ public struct ClaudeSessionStore: SessionStore {
     }
 
     /// First recorded `cwd` in a transcript (its project root). Claude stamps every
-    /// user/assistant line with `cwd`, so the first one suffices.
+    /// user/assistant line with `cwd`, so the first one suffices — and it lands in
+    /// the first few lines, so a bounded head read avoids loading a large transcript.
     private func workspaceOf(_ url: URL) -> String? {
-        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        for raw in content.split(separator: "\n", omittingEmptySubsequences: true) {
+        for raw in FileHead.lines(of: url) {
             guard
                 let obj = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
                 let cwd = obj["cwd"] as? String, !cwd.isEmpty

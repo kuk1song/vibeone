@@ -58,12 +58,11 @@ public struct CodexSessionStore: SessionStore {
 
     // MARK: - Helpers
 
-    /// Read just the `session_meta` (first line) of a rollout for its `cwd`.
+    /// Read just the `session_meta` (first line) of a rollout for its `cwd`, via a
+    /// bounded head read (no whole-file load).
     private func workspaceOf(_ url: URL) -> String? {
-        guard let content = try? String(contentsOf: url, encoding: .utf8),
-            let firstLine = content.split(
-                separator: "\n", maxSplits: 1, omittingEmptySubsequences: true
-            ).first,
+        guard
+            let firstLine = FileHead.lines(of: url).first,
             let obj = try? JSONSerialization.jsonObject(with: Data(firstLine.utf8))
                 as? [String: Any],
             (obj["type"] as? String) == "session_meta",
