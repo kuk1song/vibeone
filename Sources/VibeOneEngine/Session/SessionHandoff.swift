@@ -49,6 +49,24 @@ public enum SessionHandoff {
         }
     }
 
+    /// One project's sessions across both agents (each list newest-first) — the row
+    /// the B1 picker renders. Supersedes "globally newest one" (`currentClaudeSession`).
+    public struct ProjectSessions: Equatable, Sendable, Identifiable {
+        public var workspace: String
+        public var claude: [SessionSummary]
+        public var codex: [SessionSummary]
+
+        public var id: String { workspace }
+        /// Most recent activity across both agents — drives project ordering.
+        public var lastActive: Date { (claude + codex).map(\.modified).max() ?? .distantPast }
+
+        public init(workspace: String, claude: [SessionSummary], codex: [SessionSummary]) {
+            self.workspace = workspace
+            self.claude = claude
+            self.codex = codex
+        }
+    }
+
     // MARK: - Core (port-only orchestration)
 
     /// Convert one located session in `from` into a new resumable session in `to`.
@@ -137,5 +155,30 @@ public enum SessionHandoff {
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> CurrentSession? {
         ClaudeSessionStore(home: home).currentSession()
+    }
+
+    // MARK: - Enumeration (project picker)
+
+    /// Every project that has a session in either agent, each carrying both agents'
+    /// sessions (newest-first), projects ordered by most-recent activity. This is
+    /// what the B1 picker renders — the user selects a project and a side, then
+    /// drives `claudeToCodex` / `codexToClaude`. Supersedes `currentClaudeSession`'s
+    /// "globally newest one".
+    public static func projectSessions(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [ProjectSessions] {
+        // Both adapters return newest-first, so each filtered side stays ordered.
+        let all = ClaudeSessionStore(home: home).list() + CodexSessionStore(home: home).list()
+        return Dictionary(grouping: all, by: \.workspace)
+            .map { workspace, sessions in
+                ProjectSessions(
+                    workspace: workspace,
+                    claude: sessions.filter { $0.agent == "claude" },
+                    codex: sessions.filter { $0.agent == "codex" })
+            }
+            .sorted {
+                $0.lastActive != $1.lastActive
+                    ? $0.lastActive > $1.lastActive : $0.workspace < $1.workspace
+            }
     }
 }
