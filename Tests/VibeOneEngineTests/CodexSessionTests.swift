@@ -1,14 +1,36 @@
-import XCTest
+import Foundation
+import Testing
 
 @testable import VibeOneEngine
 
-final class CodexSessionTests: XCTestCase {
+/// Representative canonical sessions for the round-trip invariant — including a
+/// model-less one (Codex omits `turn_context` then, so the model must round-trip
+/// back to nil).
+private let codexRoundTripCases: [NamedSession] = [
+    NamedSession(
+        name: "multi-turn with model",
+        session: CanonicalSession(
+            sourceAgent: "codex", workspace: "/p", model: "gpt-5.4",
+            messages: [
+                .init(role: .user, text: "one"),
+                .init(role: .assistant, text: "two"),
+                .init(role: .user, text: "three"),
+            ])),
+    NamedSession(
+        name: "single user turn, no model",
+        session: CanonicalSession(
+            sourceAgent: "codex", workspace: "/p", model: nil,
+            messages: [.init(role: .user, text: "just one")])),
+]
+
+@Suite("Codex session codec")
+struct CodexSessionTests {
 
     /// Real-shape Codex rollout: a `session_meta` header, a `turn_context` (carries
     /// the model), a dropped `developer` instruction message, a `user` turn, an
     /// ignored `event_msg`, a dropped `reasoning` item, an `assistant` turn, and a
     /// second `user` turn.
-    private let fixture = """
+    let fixture = """
         {"type":"session_meta","timestamp":"2026-06-01T10:00:00.000Z","payload":{"id":"019d-old","cwd":"/Users/kuki/proj","model_provider":"openai","cli_version":"0.1.0"}}
         {"type":"turn_context","timestamp":"2026-06-01T10:00:00.500Z","payload":{"cwd":"/Users/kuki/proj","model":"gpt-5.4"}}
         {"type":"response_item","timestamp":"2026-06-01T10:00:01.000Z","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"You are a helpful assistant."}]}}
@@ -21,22 +43,23 @@ final class CodexSessionTests: XCTestCase {
 
     // MARK: Read
 
-    func testReadExtractsConversationDroppingNonChatItems() {
+    @Test("read extracts conversation, dropping non-chat items")
+    func readExtractsConversationDroppingNonChatItems() {
         let s = CodexSession.read(jsonl: fixture)
-        XCTAssertEqual(s.sourceAgent, "codex")
-        XCTAssertEqual(s.workspace, "/Users/kuki/proj")
-        XCTAssertEqual(s.model, "gpt-5.4", "model comes from turn_context, not session_meta")
-        XCTAssertEqual(
-            s.messages.map(\.role), [.user, .assistant, .user],
+        #expect(s.sourceAgent == "codex")
+        #expect(s.workspace == "/Users/kuki/proj")
+        #expect(s.model == "gpt-5.4", "model comes from turn_context, not session_meta")
+        #expect(
+            s.messages.map(\.role) == [.user, .assistant, .user],
             "developer instruction, reasoning, and event_msg lines must be dropped")
-        XCTAssertEqual(
-            s.messages.map(\.text),
-            ["Hello, who are you?", "I am Codex.", "Great, thanks!"])
+        #expect(
+            s.messages.map(\.text) == ["Hello, who are you?", "I am Codex.", "Great, thanks!"])
     }
 
     // MARK: Write
 
-    func testWriteEmitsMetaTurnContextThenMessages() throws {
+    @Test("write emits session_meta + turn_context then both streams per turn")
+    func writeEmitsMetaTurnContextThenMessages() throws {
         let session = CanonicalSession(
             sourceAgent: "codex", workspace: "/Users/kuki/proj", model: "gpt-5.4",
             messages: [
@@ -50,44 +73,45 @@ final class CodexSessionTests: XCTestCase {
             .split(separator: "\n").map(String.init)
         // meta + turn_context, then per turn BOTH streams: user = event_msg +
         // response_item, assistant = response_item + event_msg.
-        XCTAssertEqual(lines.count, 6, "session_meta + turn_context + 2 turns x 2 streams")
+        #expect(lines.count == 6, "session_meta + turn_context + 2 turns x 2 streams")
 
         let meta = try json(lines[0])
-        XCTAssertEqual(meta["type"] as? String, "session_meta")
-        let metaPayload = try XCTUnwrap(meta["payload"] as? [String: Any])
-        XCTAssertEqual(metaPayload["id"] as? String, "new-id")
-        XCTAssertEqual(metaPayload["cwd"] as? String, "/Users/kuki/proj")
+        #expect(meta["type"] as? String == "session_meta")
+        let metaPayload = try #require(meta["payload"] as? [String: Any])
+        #expect(metaPayload["id"] as? String == "new-id")
+        #expect(metaPayload["cwd"] as? String == "/Users/kuki/proj")
 
         let turn = try json(lines[1])
-        XCTAssertEqual(turn["type"] as? String, "turn_context")
-        XCTAssertEqual((turn["payload"] as? [String: Any])?["model"] as? String, "gpt-5.4")
+        #expect(turn["type"] as? String == "turn_context")
+        #expect((turn["payload"] as? [String: Any])?["model"] as? String == "gpt-5.4")
 
         // user turn: event_msg(user_message) then response_item(message/user).
         let userEvent = try json(lines[2])
-        XCTAssertEqual(userEvent["type"] as? String, "event_msg")
-        XCTAssertEqual((userEvent["payload"] as? [String: Any])?["type"] as? String, "user_message")
-        XCTAssertEqual((userEvent["payload"] as? [String: Any])?["message"] as? String, "Hello")
+        #expect(userEvent["type"] as? String == "event_msg")
+        #expect((userEvent["payload"] as? [String: Any])?["type"] as? String == "user_message")
+        #expect((userEvent["payload"] as? [String: Any])?["message"] as? String == "Hello")
 
         let userItem = try json(lines[3])
-        let userPayload = try XCTUnwrap(userItem["payload"] as? [String: Any])
-        XCTAssertEqual(userPayload["role"] as? String, "user")
-        let userPart = try XCTUnwrap((userPayload["content"] as? [[String: Any]])?.first)
-        XCTAssertEqual(userPart["type"] as? String, "input_text")
-        XCTAssertEqual(userPart["text"] as? String, "Hello")
+        let userPayload = try #require(userItem["payload"] as? [String: Any])
+        #expect(userPayload["role"] as? String == "user")
+        let userPart = try #require((userPayload["content"] as? [[String: Any]])?.first)
+        #expect(userPart["type"] as? String == "input_text")
+        #expect(userPart["text"] as? String == "Hello")
 
         // assistant turn: response_item(message/assistant) then event_msg(agent_message).
-        let asstPayload = try XCTUnwrap((try json(lines[4]))["payload"] as? [String: Any])
-        XCTAssertEqual(asstPayload["role"] as? String, "assistant")
-        XCTAssertEqual(
-            ((asstPayload["content"] as? [[String: Any]])?.first)?["type"] as? String,
-            "output_text")
+        let asstPayload = try #require((try json(lines[4]))["payload"] as? [String: Any])
+        #expect(asstPayload["role"] as? String == "assistant")
+        #expect(
+            ((asstPayload["content"] as? [[String: Any]])?.first)?["type"] as? String
+                == "output_text")
 
-        let asstEventPayload = try XCTUnwrap((try json(lines[5]))["payload"] as? [String: Any])
-        XCTAssertEqual(asstEventPayload["type"] as? String, "agent_message")
-        XCTAssertEqual(asstEventPayload["message"] as? String, "Hi there")
+        let asstEventPayload = try #require((try json(lines[5]))["payload"] as? [String: Any])
+        #expect(asstEventPayload["type"] as? String == "agent_message")
+        #expect(asstEventPayload["message"] as? String == "Hi there")
     }
 
-    func testWriteEmitsEventMsgStreamForUI() throws {
+    @Test("write emits the event_msg UI stream (or the thread renders empty)")
+    func writeEmitsEventMsgStreamForUI() throws {
         // Codex's UI + thread list render from the event_msg stream, not the
         // response_item model history — so both user_message and agent_message must
         // be emitted or the thread shows up empty (verified on Codex 26.609).
@@ -114,99 +138,80 @@ final class CodexSessionTests: XCTestCase {
             default: break
             }
         }
-        XCTAssertEqual(userMsg, "hi there")
-        XCTAssertEqual(agentMsg, "hello back")
+        #expect(userMsg == "hi there")
+        #expect(agentMsg == "hello back")
     }
 
     /// Codex (v0.133) refuses to resume a rollout whose `session_meta` lacks a
     /// payload-level `timestamp`, `originator`, or `cli_version` (spike A,
     /// 2026-06-12). Guard those fields so the writer stays resumable.
-    func testWriteSessionMetaCarriesResumabilityFields() throws {
+    @Test("write's session_meta carries the resumability fields")
+    func writeSessionMetaCarriesResumabilityFields() throws {
         let session = CanonicalSession(
             sourceAgent: "codex", workspace: "/p", model: nil,
             messages: [.init(role: .user, text: "hi")])
         let opts = CodexSession.WriteOptions(
             sessionId: "sid", cwd: "/p", timestamp: { "2026-06-12T00:00:00Z" })
 
-        let first = try XCTUnwrap(
+        let first = try #require(
             CodexSession.write(session, options: opts).split(separator: "\n").map(String.init).first
         )
-        let payload = try XCTUnwrap((try json(first))["payload"] as? [String: Any])
+        let payload = try #require((try json(first))["payload"] as? [String: Any])
 
-        XCTAssertEqual(payload["timestamp"] as? String, "2026-06-12T00:00:00Z")
-        XCTAssertEqual(payload["originator"] as? String, "vibeone")
-        XCTAssertEqual(payload["cli_version"] as? String, "0.1.0")
+        #expect(payload["timestamp"] as? String == "2026-06-12T00:00:00Z")
+        #expect(payload["originator"] as? String == "vibeone")
+        #expect(payload["cli_version"] as? String == "0.1.0")
     }
 
-    func testWriteOmitsTurnContextWhenNoModel() {
+    @Test("write omits turn_context when there is no model")
+    func writeOmitsTurnContextWhenNoModel() {
         let session = CanonicalSession(
             sourceAgent: "codex", workspace: "/p", model: nil,
             messages: [.init(role: .user, text: "hi")])
         let lines = CodexSession.write(
             session, options: .init(sessionId: "id", cwd: "/p", timestamp: { "t" })
         ).split(separator: "\n").map(String.init)
-        XCTAssertEqual(
-            lines.count, 3,
+        #expect(
+            lines.count == 3,
             "session_meta + 1 turn (event_msg + response_item); no turn_context without a model")
     }
 
     // MARK: Round-trip (the core invariant)
 
-    func testRoundTripPreservesMessagesAndModel() {
-        let original = CanonicalSession(
-            sourceAgent: "codex", workspace: "/p", model: "gpt-5.4",
-            messages: [
-                .init(role: .user, text: "one"),
-                .init(role: .assistant, text: "two"),
-                .init(role: .user, text: "three"),
-            ])
+    @Test(
+        "round-trip preserves messages, workspace, and model", arguments: codexRoundTripCases)
+    func roundTripPreservesMessagesAndModel(_ sample: NamedSession) {
+        let original = sample.session
         let jsonl = CodexSession.write(
-            original, options: .init(sessionId: "sid", cwd: "/p", timestamp: { "t" }))
+            original, options: .init(sessionId: "sid", cwd: original.workspace, timestamp: { "t" }))
         let reread = CodexSession.read(jsonl: jsonl)
 
-        XCTAssertEqual(reread.messages, original.messages)
-        XCTAssertEqual(reread.workspace, "/p")
-        XCTAssertEqual(reread.model, "gpt-5.4")
+        #expect(reread.messages == original.messages)
+        #expect(reread.workspace == original.workspace)
+        #expect(reread.model == original.model)
     }
 
-    // MARK: Real-data regression (skips if no local sessions)
+    // MARK: Real-data regression — each local rollout is its own case
 
-    /// Parse a genuine Codex rollout from `~/.codex/sessions` to prove the reader
+    /// Parse genuine Codex rollouts from `~/.codex/sessions` to prove the reader
     /// survives real, messy data — function calls, reasoning, developer prompts.
-    func testReadsRealLocalRolloutIfPresent() throws {
-        let fm = FileManager.default
-        let sessionsDir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions")
-        guard
-            let en = fm.enumerator(at: sessionsDir, includingPropertiesForKeys: nil)
-        else {
-            throw XCTSkip("no ~/.codex/sessions on this machine")
-        }
-
-        var rollout: URL?
-        for case let url as URL in en
-        where url.lastPathComponent.hasPrefix("rollout-") && url.pathExtension == "jsonl" {
-            rollout = url
-            break
-        }
-        guard let rollout,
-            let content = try? String(contentsOf: rollout, encoding: .utf8)
-        else {
-            throw XCTSkip("no rollout-*.jsonl found")
-        }
-
+    /// Skipped when this machine has no rollouts (e.g. CI).
+    @Test(
+        "reads a real local Codex rollout",
+        .enabled(if: !RealData.codexRolloutFiles.isEmpty),
+        arguments: RealData.codexRolloutFiles)
+    func readsRealLocalRollout(_ file: URL) throws {
+        let content = try String(contentsOf: file, encoding: .utf8)
         let s = CodexSession.read(jsonl: content)
-        XCTAssertEqual(s.sourceAgent, "codex")
-        XCTAssertFalse(s.workspace.isEmpty, "real rollout should yield a workspace cwd")
-        XCTAssertFalse(s.messages.isEmpty, "real rollout should yield at least one message")
-        XCTAssertTrue(s.messages.allSatisfy { !$0.text.isEmpty })
-        print(
-            "[real-data] \(rollout.lastPathComponent): \(s.messages.count) msgs · "
-                + "workspace=\(s.workspace) · model=\(s.model ?? "nil")")
+        #expect(s.sourceAgent == "codex")
+        #expect(!s.workspace.isEmpty, "real rollout should yield a workspace cwd")
+        #expect(!s.messages.isEmpty, "real rollout should yield at least one message")
+        #expect(s.messages.allSatisfy { !$0.text.isEmpty })
     }
 
     // MARK: Helpers
 
     private func json(_ line: String) throws -> [String: Any] {
-        try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        try #require(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
     }
 }
