@@ -1,35 +1,40 @@
-import XCTest
+import Foundation
+import Testing
 
 @testable import VibeOneEngine
 
+private let homeDir = FileManager.default.homeDirectoryForCurrentUser
+private func fileExists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
+
 /// Smoke tests against the *real* config on this machine. Like the session
 /// real-data tests, they verify the tolerant readers survive actual files
-/// (quoted table keys, unrelated tables, arbitrary scalars) — they skip cleanly
-/// when a file is absent, so CI without these files still passes.
-final class ConfigRealDataTests: XCTestCase {
+/// (quoted table keys, unrelated tables, arbitrary scalars). Each is
+/// `.enabled(if:)`-gated on the file's presence, so a machine without it (e.g.
+/// CI) reports the test as skipped rather than failed.
+@Suite("Config readers — real on-disk data")
+struct ConfigRealDataTests {
 
-    private let home = FileManager.default.homeDirectoryForCurrentUser
-
-    func testCodexConfigParsesWithoutCrashing() throws {
-        let url = ConfigLocation.codexConfig(home: home)
-        guard let toml = try? String(contentsOf: url, encoding: .utf8) else {
-            throw XCTSkip("no real ~/.codex/config.toml")
-        }
+    @Test(
+        "Codex config.toml parses without crashing",
+        .enabled(if: fileExists(ConfigLocation.codexConfig(home: homeDir))))
+    func codexConfigParsesWithoutCrashing() throws {
+        let url = ConfigLocation.codexConfig(home: homeDir)
+        let toml = try String(contentsOf: url, encoding: .utf8)
         let servers = CodexMCP.read(toml: toml)
-        // We don't assert a count (machine-dependent) — just that parse is total
-        // and re-rendering each parsed server round-trips.
+        // No count assertion (machine-dependent) — just that parse is total and
+        // every parsed server is well-formed.
         for server in servers {
-            XCTAssertFalse(server.name.isEmpty)
+            #expect(!server.name.isEmpty)
         }
-        print("[real-data] ~/.codex/config.toml: \(servers.count) MCP server(s)")
     }
 
-    func testClaudeUserScopeParsesWithoutCrashing() throws {
-        let url = ConfigLocation.claudeUserConfig(home: home)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw XCTSkip("no real ~/.claude.json")
+    @Test(
+        "Claude user-scope MCP parses without crashing",
+        .enabled(if: fileExists(ConfigLocation.claudeUserConfig(home: homeDir))))
+    func claudeUserScopeParsesWithoutCrashing() {
+        let servers = MCPSync.readUserScope(home: homeDir)
+        for server in servers {
+            #expect(!server.name.isEmpty)
         }
-        let servers = MCPSync.readUserScope(home: home)
-        print("[real-data] ~/.claude.json user/local-scope: \(servers.count) MCP server(s)")
     }
 }
