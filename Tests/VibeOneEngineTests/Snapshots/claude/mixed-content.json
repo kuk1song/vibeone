@@ -1,0 +1,36 @@
+{
+  "messageCount" : 7,
+  "messages" : [
+    {
+      "role" : "user",
+      "text" : "scrubbed text 4"
+    },
+    {
+      "role" : "assistant",
+      "text" : "scrubbed text 165"
+    },
+    {
+      "role" : "user",
+      "text" : "scrubbed text 171"
+    },
+    {
+      "role" : "assistant",
+      "text" : "scrubbed text 225"
+    },
+    {
+      "role" : "user",
+      "text" : "scrubbed text 231"
+    },
+    {
+      "role" : "assistant",
+      "text" : "scrubbed text 265"
+    },
+    {
+      "role" : "assistant",
+      "text" : "scrubbed text 287"
+    }
+  ],
+  "model" : "claude-opus-4-8",
+  "sourceAgent" : "claude",
+  "workspace" : "/Users/dev/project"
+}
