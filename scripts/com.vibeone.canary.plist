@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd template for the VibeOne nightly canary (PR-E E4, ADR-010 ⑥).
+
+  Install:
+    1. Copy scripts/canary.sh's ABSOLUTE path into ProgramArguments below.
+    2. cp scripts/com.vibeone.canary.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.vibeone.canary.plist
+  Run once now:  launchctl start com.vibeone.canary
+  Uninstall:     launchctl unload ~/Library/LaunchAgents/com.vibeone.canary.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.vibeone.canary</string>
+
+    <!-- EDIT: absolute path to scripts/canary.sh in your checkout. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/ABSOLUTE/PATH/TO/vibeone/scripts/canary.sh</string>
+    </array>
+
+    <!-- Daily at 03:17 local. Off the hour on purpose (mirrors the GH-schedule
+         guidance) so it doesn't pile onto every cron firing at :00. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>17</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/vibeone-canary.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/vibeone-canary.err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
