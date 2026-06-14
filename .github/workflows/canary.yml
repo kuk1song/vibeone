@@ -1,0 +1,85 @@
+name: Canary
+
+# Drift sentinel against the *current* Claude Code / Codex releases — PR-E E4,
+# ADR-010 ⑥. The golden-master suite only proves we still parse FROZEN fixtures;
+# it can never catch "a new CLI release changed the on-disk format." This workflow
+# is the part that can, on GitHub-hosted runners:
+#
+#   fixture-regression — re-runs the committed suite on the current macos-26 image
+#                        on a schedule, catching toolchain/runner drift even when
+#                        no one commits for weeks. No secret required.
+#
+#   synthetic-claude   — installs the latest Claude Code CLI, generates a real
+#                        session non-interactively, and parses it with our reader
+#                        (the CanaryTests Claude leg). This is the spike-verified
+#                        mechanism (a local `claude -p --output-format json` run
+#                        produced a current-format JSONL our parser read clean).
+#                        Self-guards on the ANTHROPIC_API_KEY secret, so the job
+#                        skips cleanly on repos/forks that haven't set it.
+#
+# Codex has no equivalent leg yet: there is no verified headless `codex` CLI auth
+# path (26.609 is Desktop + ~/.codex/sqlite). The Codex drift signal comes from
+# the local nightly canary (scripts/canary.sh) reading real ~/.codex rollouts.
+
+on:
+  schedule:
+    # 03:17 UTC daily — off the hour (GitHub drops jobs that pile onto :00).
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fixture-regression:
+    name: Committed fixtures vs current runner
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Toolchain
+        run: swift --version
+      - name: Build & test (includes golden-master)
+        run: swift test
+
+  synthetic-claude:
+    name: Parse a freshly generated Claude session
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Guard — require ANTHROPIC_API_KEY
+        id: guard
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY not set — skipping synthetic Claude canary."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install latest Claude Code CLI
+        if: steps.guard.outputs.run == 'true'
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Generate a real session non-interactively
+        if: steps.guard.outputs.run == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Writes ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl in the CURRENT
+          # on-disk format — exactly what the parser must keep up with.
+          claude -p "reply with the single word: ok" --output-format json
+
+      - name: Parse it with our reader (Claude canary leg)
+        if: steps.guard.outputs.run == 'true'
+        env:
+          VIBEONE_CANARY: "1"
+        run: swift test --filter claudeStoragePresent --filter claudeStoreParses
