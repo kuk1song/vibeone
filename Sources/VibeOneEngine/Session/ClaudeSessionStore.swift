@@ -33,6 +33,38 @@ public struct ClaudeSessionStore: SessionStore {
             resumeCommand: "claude --resume \(sessionId)", backup: backup)
     }
 
+    /// Every transcript on disk, newest first. All transcripts in a project dir
+    /// share one `cwd`, so the workspace is recovered once per dir (from the first
+    /// transcript whose header carries a `cwd`) and reused; a dir with none is
+    /// skipped. The resume id is the transcript file's UUID stem (PARSERS §1).
+    public func list() -> [SessionSummary] {
+        let fm = FileManager.default
+        let root = SessionLocation.claudeProjectsDir(home: home)
+        guard
+            let dirs = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        else { return [] }
+
+        var out: [SessionSummary] = []
+        for dir in dirs {
+            guard
+                let entries = try? fm.contentsOfDirectory(
+                    at: dir, includingPropertiesForKeys: [.contentModificationDateKey])
+            else { continue }
+            let transcripts = entries.filter { $0.pathExtension == "jsonl" }
+            guard let workspace = transcripts.lazy.compactMap(workspaceOf).first else { continue }
+            for url in transcripts {
+                out.append(
+                    SessionSummary(
+                        agent: agent,
+                        id: url.deletingPathExtension().lastPathComponent,
+                        workspace: workspace,
+                        path: url,
+                        modified: modifiedDate(url)))
+            }
+        }
+        return out.sorted { $0.modified != $1.modified ? $0.modified > $1.modified : $0.id < $1.id }
+    }
+
     /// Newest `.jsonl` (by mtime) under this workspace's encoded project dir. The
     /// dir already scopes to one workspace, so this is a plain newest-in-dir scan.
     public func latestSession(workspace: String) -> URL? {
@@ -50,8 +82,9 @@ public struct ClaudeSessionStore: SessionStore {
     /// `.`, `_`, and every other non-alphanumeric char all map to `-`, PARSERS §1).
     /// Returns nil if no transcript with a readable `cwd` exists.
     ///
-    /// NOTE: superseded as the *switch trigger* by B1's explicit picker (ADR-008);
-    /// kept as the enumeration base PR-B will build `list()` on.
+    /// NOTE: superseded as the *switch trigger* by B1's explicit picker (ADR-008),
+    /// and as the project-wide enumeration by `list()`; kept as the "which session
+    /// am I in right now" single-session locator.
     public func currentSession() -> SessionHandoff.CurrentSession? {
         let fm = FileManager.default
         let root = SessionLocation.claudeProjectsDir(home: home)
@@ -95,10 +128,10 @@ public struct ClaudeSessionStore: SessionStore {
     }
 
     /// First recorded `cwd` in a transcript (its project root). Claude stamps every
-    /// user/assistant line with `cwd`, so the first one suffices.
+    /// user/assistant line with `cwd`, so the first one suffices — and it lands in
+    /// the first few lines, so a bounded head read avoids loading a large transcript.
     private func workspaceOf(_ url: URL) -> String? {
-        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        for raw in content.split(separator: "\n", omittingEmptySubsequences: true) {
+        for raw in FileHead.lines(of: url) {
             guard
                 let obj = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
                 let cwd = obj["cwd"] as? String, !cwd.isEmpty

@@ -33,6 +33,29 @@ public struct CodexSessionStore: SessionStore {
             resumeCommand: "codex resume \(sessionId)", backup: backup)
     }
 
+    /// Every rollout under `~/.codex/sessions/**`, newest first. The resume id and
+    /// workspace both come from each rollout's `session_meta` (its first line);
+    /// rollouts without one are skipped.
+    public func list() -> [SessionSummary] {
+        let fm = FileManager.default
+        let root = SessionLocation.codexSessionsDir(home: home)
+        guard
+            let enumerator = fm.enumerator(
+                at: root, includingPropertiesForKeys: [.contentModificationDateKey])
+        else { return [] }
+
+        var out: [SessionSummary] = []
+        for case let url as URL in enumerator
+        where url.lastPathComponent.hasPrefix("rollout-") && url.pathExtension == "jsonl" {
+            guard let meta = meta(of: url) else { continue }
+            out.append(
+                SessionSummary(
+                    agent: agent, id: meta.id, workspace: meta.cwd,
+                    path: url, modified: modifiedDate(url)))
+        }
+        return out.sorted { $0.modified != $1.modified ? $0.modified > $1.modified : $0.id < $1.id }
+    }
+
     /// Newest rollout (by mtime) whose recorded `session_meta.cwd` matches
     /// `workspace`. Scans `~/.codex/sessions/**` newest-first, returns the first
     /// match.
@@ -58,19 +81,24 @@ public struct CodexSessionStore: SessionStore {
 
     // MARK: - Helpers
 
-    /// Read just the `session_meta` (first line) of a rollout for its `cwd`.
-    private func workspaceOf(_ url: URL) -> String? {
-        guard let content = try? String(contentsOf: url, encoding: .utf8),
-            let firstLine = content.split(
-                separator: "\n", maxSplits: 1, omittingEmptySubsequences: true
-            ).first,
+    /// `(id, cwd)` from a rollout's `session_meta` — its first line — read via a
+    /// bounded head read (no whole-file load). Nil unless line 1 is a `session_meta`
+    /// carrying both fields.
+    private func meta(of url: URL) -> (id: String, cwd: String)? {
+        guard
+            let firstLine = FileHead.lines(of: url).first,
             let obj = try? JSONSerialization.jsonObject(with: Data(firstLine.utf8))
                 as? [String: Any],
             (obj["type"] as? String) == "session_meta",
-            let payload = obj["payload"] as? [String: Any]
+            let payload = obj["payload"] as? [String: Any],
+            let id = payload["id"] as? String, !id.isEmpty,
+            let cwd = payload["cwd"] as? String, !cwd.isEmpty
         else { return nil }
-        return payload["cwd"] as? String
+        return (id, cwd)
     }
+
+    /// Recorded `cwd` of a rollout (for source-side workspace matching).
+    private func workspaceOf(_ url: URL) -> String? { meta(of: url)?.cwd }
 
     private func modifiedDate(_ url: URL) -> Date {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
