@@ -34,6 +34,12 @@ final class AppState: ObservableObject {
     /// Read-only config drift (memory / skills / MCP) for the current album.
     @Published var configStatus: ConfigStatus?
 
+    /// How a Codex switch opens: the Desktop app (the `codex://` deep link —
+    /// default, since Codex's primary surface is its app) or a terminal
+    /// `codex resume`. The user-facing toggle + persistence land with the settings
+    /// surface; for now the default matches the common case.
+    @Published var codexOpensDesktop = true
+
     /// True while a switch is in flight (guards against a double-launch).
     @Published var isLaunching = false
 
@@ -140,13 +146,14 @@ final class AppState: ObservableObject {
 
     /// Hand the cued source session off to `selection` and open it. The engine
     /// only ever CREATES a new target session (never mutates the source); opening
-    /// the agent is a separate `AgentLauncher` step whose feasibility is
-    /// direction-dependent (Claude = terminal resume now; Codex Desktop = pending).
+    /// the agent is a separate `AgentLauncher` step (Claude = terminal resume;
+    /// Codex = Desktop deep link by default, or terminal resume).
     func activate() {
         guard let source, !isLaunching else { return }
         let destination = selection
         let workspace = source.workspace
         let sourcePath = source.path
+        let codexMode: AgentLauncher.CodexMode = codexOpensDesktop ? .desktop : .terminal
         isLaunching = true
         feedback = nil
         let home = home
@@ -163,7 +170,11 @@ final class AppState: ObservableObject {
                 }
                 await MainActor.run {
                     let launch = AgentLauncher.open(
-                        agent: destination, command: result.resumeCommand, workspace: workspace)
+                        agent: destination,
+                        sessionId: result.sessionId,
+                        resumeCommand: result.resumeCommand,
+                        workspace: workspace,
+                        codexMode: codexMode)
                     self.isLaunching = false
                     self.feedback = launch.message
                 }
