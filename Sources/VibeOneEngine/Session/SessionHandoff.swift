@@ -172,10 +172,13 @@ public enum SessionHandoff {
     /// drives `claudeToCodex` / `codexToClaude`. Supersedes `currentClaudeSession`'s
     /// "globally newest one".
     public static func projectSessions(
-        home: URL = FileManager.default.homeDirectoryForCurrentUser
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        excluding excluded: PathGuard? = nil
     ) -> [ProjectSessions] {
         // Both adapters return newest-first, so each filtered side stays ordered.
-        let all = ClaudeSessionStore(home: home).list() + CodexSessionStore(home: home).list()
+        // A workspace on the safety deny-list never surfaces in the picker (ADR-012).
+        let all = (ClaudeSessionStore(home: home).list() + CodexSessionStore(home: home).list())
+            .filter { excluded?.isDenied($0.workspace) != true }
         return Dictionary(grouping: all, by: \.workspace)
             .map { workspace, sessions in
                 ProjectSessions(
