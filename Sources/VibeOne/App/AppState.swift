@@ -31,14 +31,19 @@ final class AppState: ObservableObject {
     /// Whether the pull-up queue (session selection) is showing.
     @Published var queueOpen = false
 
+    /// Whether the pull-up settings panel (under ⋯) is showing.
+    @Published var settingsOpen = false
+
     /// Read-only config drift (memory / skills / MCP) for the current album.
     @Published var configStatus: ConfigStatus?
 
     /// How a Codex switch opens: the Desktop app (the `codex://` deep link —
-    /// default, since Codex's primary surface is its app) or a terminal
-    /// `codex resume`. The user-facing toggle + persistence land with the settings
-    /// surface; for now the default matches the common case.
-    @Published var codexOpensDesktop = true
+    /// default, since Codex's primary surface is its app) or a terminal `codex
+    /// resume`. Toggled inline in the player (Codex-only) and in Settings; persisted
+    /// across launches.
+    @Published var codexOpensDesktop: Bool {
+        didSet { UserDefaults.standard.set(codexOpensDesktop, forKey: Self.codexDesktopKey) }
+    }
 
     /// True while a switch is in flight (guards against a double-launch).
     @Published var isLaunching = false
@@ -46,12 +51,21 @@ final class AppState: ObservableObject {
     /// Transient one-line outcome of the last switch (success or failure).
     @Published var feedback: String?
 
+    /// Folders VibeOne must never touch (ADR-012). Shown read-only in Settings; the
+    /// editor lands later. The default preset guards the work tree.
+    let protectedPaths = ["~/ot"]
+
     private let home: URL
+    private let pathGuard: PathGuard
+    private static let codexDesktopKey = "codexOpensDesktop"
 
     /// `autoload: false` builds an inert instance (no disk / shell probes) for the
     /// render harness, which seeds the published state directly.
     init(home: URL = FileManager.default.homeDirectoryForCurrentUser, autoload: Bool = true) {
         self.home = home
+        self.pathGuard = PathGuard(deniedPaths: protectedPaths, home: home)
+        self.codexOpensDesktop =
+            UserDefaults.standard.object(forKey: Self.codexDesktopKey) as? Bool ?? true
         guard autoload else { return }
         // Each probe spawns a short-lived shell / scans disk — off the main thread,
         // publishing on the main actor so the menu bar appears instantly.
@@ -92,8 +106,9 @@ final class AppState: ObservableObject {
     /// run off the main thread; results publish on the main actor.
     func refresh() {
         let home = home
+        let exclusions = pathGuard
         Task.detached(priority: .userInitiated) {
-            let projects = SessionHandoff.projectSessions(home: home)
+            let projects = SessionHandoff.projectSessions(home: home, excluding: exclusions)
             await MainActor.run {
                 self.projects = projects
                 self.albumIndex = min(self.albumIndex, max(0, projects.count - 1))
@@ -127,6 +142,12 @@ final class AppState: ObservableObject {
         feedback = nil
     }
 
+    /// The inline Codex mode key (Desktop ⇄ Terminal). Only meaningful when the
+    /// destination is Codex; Claude always opens in a terminal.
+    func toggleCodexMode() {
+        codexOpensDesktop.toggle()
+    }
+
     /// Pick an exact session from the queue: jump to its project, cue the OTHER
     /// agent as the destination, and remember the exact session to hand off.
     func pick(_ summary: SessionSummary) {
@@ -150,6 +171,12 @@ final class AppState: ObservableObject {
     /// Codex = Desktop deep link by default, or terminal resume).
     func activate() {
         guard let source, !isLaunching else { return }
+        // Belt-and-suspenders with the enumeration filter: never act on a denied
+        // workspace, even if one somehow surfaced (ADR-012 "双保险").
+        guard !pathGuard.isDenied(source.workspace) else {
+            feedback = "Blocked — \(projectName) is on the never-touch list"
+            return
+        }
         let destination = selection
         let workspace = source.workspace
         let sourcePath = source.path

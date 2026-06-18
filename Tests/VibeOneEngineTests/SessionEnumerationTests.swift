@@ -211,6 +211,20 @@ struct ProjectSessionsTests {
         defer { try? FileManager.default.removeItem(at: home) }
         #expect(SessionHandoff.projectSessions(home: home).isEmpty)
     }
+
+    @Test("hides workspaces matched by the safety deny-list")
+    func excludesDeniedWorkspaces() throws {
+        let home = try makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        // A session inside a denied tree and one outside it.
+        try writeClaude(home: home, workspace: "/Users/dev/ot/secret", id: "ot", modified: at(3000))
+        try writeClaude(home: home, workspace: "/Users/dev/proj", id: "ok", modified: at(2000))
+
+        let denied = PathGuard(deniedPaths: ["/Users/dev/ot"], home: home)
+        let projects = SessionHandoff.projectSessions(home: home, excluding: denied)
+
+        #expect(projects.map(\.workspace) == ["/Users/dev/proj"])  // ot tree gone
+    }
 }
 
 // MARK: - Real-data smoke (opportunistic)
