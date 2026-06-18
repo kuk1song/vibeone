@@ -41,10 +41,21 @@ enum DS {
         static let brandMark: CGFloat = 32  // header logo tile
 
         // "Now playing" player (ADR-006).
-        static let playerCover: CGFloat = 120  // the LED-face album cover (square)
+        static let playerCover: CGFloat = 132  // the LED-face album cover (square)
         static let playButton: CGFloat = 50  // centered big launch circle
         static let transportButton: CGFloat = 32  // side icon buttons
         static let progressBar: CGFloat = 3  // config-sync progress line height
+
+        // Pull-up queue (session picker, ADR-011).
+        static let queueArt: CGFloat = 38  // per-session "album art" tile
+        static let queueMaxHeight: CGFloat = 300  // queue scroll cap inside the popover
+    }
+
+    // MARK: Opacity (the only sanctioned alpha values — never inline in a view)
+
+    enum Opacity {
+        static let selectedTint = 0.14  // accent wash behind a selected row
+        static let disabled = 0.4  // a dimmed, non-actionable control
     }
 
     // MARK: Colors (semantic roles + brand accents)

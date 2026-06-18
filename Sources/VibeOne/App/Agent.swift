@@ -34,6 +34,10 @@ enum Agent: String, CaseIterable, Identifiable {
         case .codex: return "chevron.left.forwardslash.chevron.right"
         }
     }
+
+    /// The other agent — the switch target relative to `self`. With exactly two
+    /// agents, ⏮ and ⏭ both resolve to this flip.
+    var other: Agent { self == .claude ? .codex : .claude }
 }
 
 // MARK: - Hex color helper
