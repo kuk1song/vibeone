@@ -94,17 +94,24 @@ public enum SessionHandoff {
     /// Locate the most recent Codex rollout for `workspace`, convert it, and write
     /// a resumable Claude transcript under `~/.claude/projects/<encoded-cwd>/`.
     ///
+    /// `source` is the exact rollout to hand off; when nil it falls back to the
+    /// newest in `workspace`. Callers that already located the session (e.g. the
+    /// picker, which lets the user choose a specific session) should pass it, so
+    /// *that* conversation is handed off rather than whichever is newest by mtime —
+    /// the symmetric counterpart of `claudeToCodex(source:)`.
+    ///
     /// Generators are injected for deterministic tests; production uses real
     /// `UUID()` / `Date()`.
     public static func codexToClaude(
         workspace: String,
+        source: URL? = nil,
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         makeSessionId: () -> String = { UUID().uuidString.lowercased() },
         now: () -> Date = { Date() }
     ) throws -> Result {
         let from = CodexSessionStore(home: home)
         let to = ClaudeSessionStore(home: home)
-        guard let source = from.latestSession(workspace: workspace) else {
+        guard let source = source ?? from.latestSession(workspace: workspace) else {
             throw Failure.noSessionFound
         }
         return try handoff(

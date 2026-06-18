@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import VibeOneEngine
 
 // MARK: - Render harness  (dev tool)
 //
@@ -15,8 +16,9 @@ enum RenderHarness {
         let dir = URL(fileURLWithPath: outDir)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        render(popover(.claude), name: "popover-claude", dir: dir)
-        render(popover(.codex), name: "popover-codex", dir: dir)
+        render(popover(destination: .codex), name: "popover-switch-to-codex", dir: dir)
+        render(popover(destination: .claude), name: "popover-switch-to-claude", dir: dir)
+        render(queue(), name: "popover-queue", dir: dir)
         // Frozen frames prove the face blinks: open (t=1.0) vs mid-blink (t=0.08).
         render(faceCover(t: 1.0), name: "facecover-open", dir: dir)
         render(faceCover(t: 0.08), name: "facecover-blink", dir: dir)
@@ -25,10 +27,49 @@ enum RenderHarness {
         exit(0)
     }
 
-    static func popover(_ agent: Agent) -> some View {
-        let state = AppState()
-        state.selection = agent
-        return PopoverCard(state: state)
+    /// A popover seeded with deterministic sample sessions (the live `AppState`
+    /// loads from disk asynchronously, too late for a synchronous render).
+    static func popover(destination: Agent) -> some View {
+        PopoverCard(state: seededState(destination: destination))
+    }
+
+    /// The pull-up queue, flattened (no `ScrollView`) so ImageRenderer lays it out.
+    static func queue() -> some View {
+        QueueView(state: seededState(destination: .codex), scrollable: false)
+    }
+
+    private static func seededState(destination: Agent) -> AppState {
+        let state = AppState(autoload: false)
+        state.projects = sampleProjects()
+        state.selection = destination
+        // Real config drift for this repo, so the progress line shows a true shape.
+        state.configStatus = ConfigStatus.read(workspace: FileManager.default.currentDirectoryPath)
+        return state
+    }
+
+    /// Three projects (albums) with mixed agents — what `projectSessions()` returns.
+    /// Ages are relative to launch so the "Nm/Nh/Nd ago" labels read naturally.
+    static func sampleProjects() -> [SessionHandoff.ProjectSessions] {
+        let now = Date()
+        func summary(_ agent: Agent, _ project: String, ago: TimeInterval) -> SessionSummary {
+            SessionSummary(
+                agent: agent.rawValue, id: "\(agent.rawValue)-\(project)",
+                workspace: "/Users/dev/\(project)",
+                path: URL(fileURLWithPath: "/tmp/\(agent.rawValue)-\(project).jsonl"),
+                modified: now.addingTimeInterval(-ago))
+        }
+        return [
+            .init(
+                workspace: "/Users/dev/slash-stage",
+                claude: [summary(.claude, "slash-stage", ago: 120)],
+                codex: [summary(.codex, "slash-stage", ago: 3600)]),
+            .init(
+                workspace: "/Users/dev/PrivateGpt",
+                claude: [summary(.claude, "PrivateGpt", ago: 10800)], codex: []),
+            .init(
+                workspace: "/Users/dev/rag-pipeline",
+                claude: [], codex: [summary(.codex, "rag-pipeline", ago: 90000)]),
+        ]
     }
 
     static func faceCover(t: Double) -> some View {
