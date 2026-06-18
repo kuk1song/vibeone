@@ -305,6 +305,25 @@ final class SessionHandoffTests: XCTestCase {
                 .messages.map(\.text), ["older session"])
     }
 
+    func testCodexToClaudeUsesExplicitSourceOverLatest() throws {
+        let workspace = "/Users/kuki/proj"
+        let older = try writeRollout(
+            workspace: workspace, datePath: "2026/06/06", id: "older",
+            messages: [(.user, "older session")], modified: Date(timeIntervalSince1970: 1000))
+        try writeRollout(
+            workspace: workspace, datePath: "2026/06/06", id: "newer",
+            messages: [(.user, "newer session")], modified: Date(timeIntervalSince1970: 9000))
+
+        // An explicit source is handed off verbatim, bypassing "latest by mtime" —
+        // this is the path the picker uses when the user selects a specific session.
+        let result = try SessionHandoff.codexToClaude(
+            workspace: workspace, source: older, home: home,
+            makeSessionId: { "u" }, now: { Date(timeIntervalSince1970: 0) })
+        XCTAssertEqual(
+            ClaudeSession.read(jsonl: try String(contentsOf: result.path, encoding: .utf8))
+                .messages.map(\.text), ["older session"])
+    }
+
     func testClaudeToCodexGeneratesLowercaseSessionId() throws {
         let workspace = "/Users/kuki/proj"
         try writeClaudeSession(
