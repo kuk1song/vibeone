@@ -293,13 +293,14 @@ struct PlayButton: View {
 /// emphasized control.
 struct TransportButton: View {
     var symbol: String
+    var tint: Color = DS.Colors.textSecondary  // accent for a live/stateful control
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: DS.Size.transportButton * 0.42, weight: .semibold))
-                .foregroundStyle(DS.Colors.textSecondary)
+                .foregroundStyle(tint)
                 .frame(width: DS.Size.transportButton, height: DS.Size.transportButton)
                 .contentShape(Rectangle())
         }

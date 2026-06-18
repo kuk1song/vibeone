@@ -17,8 +17,12 @@ enum RenderHarness {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
         render(popover(destination: .codex), name: "popover-switch-to-codex", dir: dir)
+        render(
+            PopoverCard(state: seededState(destination: .codex, codexDesktop: false)),
+            name: "popover-switch-to-codex-terminal", dir: dir)
         render(popover(destination: .claude), name: "popover-switch-to-claude", dir: dir)
         render(queue(), name: "popover-queue", dir: dir)
+        render(settings(), name: "popover-settings", dir: dir)
         // Frozen frames prove the face blinks: open (t=1.0) vs mid-blink (t=0.08).
         render(faceCover(t: 1.0), name: "facecover-open", dir: dir)
         render(faceCover(t: 0.08), name: "facecover-blink", dir: dir)
@@ -38,13 +42,19 @@ enum RenderHarness {
         QueueView(state: seededState(destination: .codex), scrollable: false)
     }
 
-    private static func seededState(destination: Agent) -> AppState {
+    private static func seededState(destination: Agent, codexDesktop: Bool = true) -> AppState {
         let state = AppState(autoload: false)
         state.projects = sampleProjects()
         state.selection = destination
+        state.codexOpensDesktop = codexDesktop
         // Real config drift for this repo, so the progress line shows a true shape.
         state.configStatus = ConfigStatus.read(workspace: FileManager.default.currentDirectoryPath)
         return state
+    }
+
+    /// The pull-up settings panel (opened from ⋯).
+    static func settings() -> some View {
+        SettingsPanel(state: seededState(destination: .codex))
     }
 
     /// Three projects (albums) with mixed agents — what `projectSessions()` returns.

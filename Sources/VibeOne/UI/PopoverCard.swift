@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import VibeOneEngine
 
@@ -12,7 +13,10 @@ import VibeOneEngine
 ///   • ⏮ / ⏭   — flip the destination within this project (Claude ⇄ Codex)
 ///   • ▶ play   — SWITCH: hand the current conversation off to the destination and
 ///                open it. Nothing switches until play (explicit-select, ADR-008).
-///   • ☰        — (under ⋯) pull up the QUEUE: pick any session across projects
+///   • macwindow/terminal — (Codex only) the inline key for where Codex opens:
+///                the Desktop app ⇄ a terminal. The icon IS the current mode.
+///   • ☰        — pull up the QUEUE: pick any session across projects
+///   • ⋯        — pull up SETTINGS: Codex open mode, protected folders, Quit
 ///
 /// Built entirely from `DesignSystem.swift` tokens — no raw numbers / hex / font
 /// sizes here. All data and actions live on `AppState`; this is the view only.
@@ -24,7 +28,9 @@ struct PopoverCard: View {
 
     var body: some View {
         Group {
-            if state.projects.isEmpty {
+            if state.settingsOpen {
+                SettingsPanel(state: state)
+            } else if state.projects.isEmpty {
                 emptyState
             } else if state.queueOpen {
                 QueueView(state: state)
@@ -105,17 +111,18 @@ struct PopoverCard: View {
                 .disabled(!state.canSwitch)
                 .opacity(state.canSwitch ? 1 : DS.Opacity.disabled)
             TransportButton(symbol: "forward.end.fill") { flip() }
-            TransportButton(symbol: "ellipsis") {}  // more (later)
+            TransportButton(symbol: "ellipsis") {
+                withAnimation(DS.switchAnimation) { state.settingsOpen = true }
+            }
         }
     }
 
-    /// Second row aligned under the transport: a left secondary slot (under ⟲) and
-    /// the QUEUE button under ⋯ that pulls up session selection (Spotify-style).
+    /// Second row aligned under the transport: the Codex mode key (under ⏮, Codex-
+    /// only) and the QUEUE button under ⋯ that pulls up session selection.
     private var secondary: some View {
         HStack(spacing: DS.Spacing.md) {
             TransportButton(symbol: "slider.horizontal.3") {}  // config detail (later)
-            Color.clear
-                .frame(width: DS.Size.transportButton, height: DS.Size.transportButton)
+            modeKey
             Color.clear
                 .frame(width: DS.Size.playButton, height: DS.Size.transportButton)
             Color.clear
@@ -123,6 +130,24 @@ struct PopoverCard: View {
             TransportButton(symbol: "music.note.list") {
                 withAnimation(DS.switchAnimation) { state.queueOpen = true }
             }
+        }
+    }
+
+    /// Codex-only inline toggle: the icon IS the current mode — `macwindow` (open in
+    /// the Desktop app) ⇄ `terminal` (open in the CLI). Accent-tinted so it reads as
+    /// a live control; a blank slot keeps the row stable when the destination is
+    /// Claude (always a terminal).
+    @ViewBuilder
+    private var modeKey: some View {
+        if destination == .codex {
+            TransportButton(
+                symbol: state.codexOpensDesktop ? "macwindow" : "terminal", tint: accent
+            ) {
+                withAnimation(DS.switchAnimation) { state.toggleCodexMode() }
+            }
+        } else {
+            Color.clear
+                .frame(width: DS.Size.transportButton, height: DS.Size.transportButton)
         }
     }
 
@@ -287,6 +312,125 @@ enum RelativeTime {
         case ..<3600: return "\(Int(seconds / 60))m ago"
         case ..<86400: return "\(Int(seconds / 3600))h ago"
         default: return "\(Int(seconds / 86400))d ago"
+        }
+    }
+}
+
+// MARK: - Settings panel (pull-up under ⋯)
+
+/// The settings surface — a pull-up panel in the popover, opened from the ⋯ "more"
+/// key (the same slide-in language as the Queue). Holds the canonical "Open Codex
+/// in" toggle (mirrored by the inline player key), the read-only safety deny-list
+/// (the editor lands later), and the app's Quit — which a menu-bar-only app needs a
+/// home for.
+struct SettingsPanel: View {
+    @ObservedObject var state: AppState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Spacing.lg) {
+            header
+            section("Open Codex in") { modePicker }
+            section("Protected folders") { protectedList }
+            Divider().overlay(DS.Colors.hairline)
+            footer
+        }
+        .padding(DS.Spacing.lg)
+    }
+
+    private var header: some View {
+        HStack {
+            Text("Settings")
+                .font(DS.Typography.title)
+                .foregroundStyle(DS.Colors.textPrimary)
+            Spacer()
+            Button {
+                withAnimation(DS.switchAnimation) { state.settingsOpen = false }
+            } label: {
+                Image(systemName: "chevron.down")
+                    .foregroundStyle(DS.Colors.textSecondary)
+                    .frame(width: DS.Size.transportButton, height: DS.Size.transportButton)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// Terminal ⇄ Desktop, the canonical control behind the inline player key.
+    private var modePicker: some View {
+        HStack(spacing: 0) {
+            modeSegment(title: "Terminal", desktop: false)
+            modeSegment(title: "Desktop app", desktop: true)
+        }
+        .padding(DS.Spacing.xs)
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.control, style: .continuous)
+                .fill(DS.Colors.hairline))
+    }
+
+    private func modeSegment(title: String, desktop: Bool) -> some View {
+        let selected = state.codexOpensDesktop == desktop
+        return Button {
+            withAnimation(DS.switchAnimation) { state.codexOpensDesktop = desktop }
+        } label: {
+            Text(title)
+                .font(DS.Typography.body)
+                .foregroundStyle(selected ? Color.white : DS.Colors.textSecondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DS.Spacing.sm)
+                .background {
+                    if selected {
+                        RoundedRectangle(
+                            cornerRadius: DS.Radius.control - DS.Spacing.xs, style: .continuous
+                        )
+                        .fill(DS.Colors.accentCodex)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var protectedList: some View {
+        VStack(alignment: .leading, spacing: DS.Spacing.sm) {
+            ForEach(state.protectedPaths, id: \.self) { path in
+                HStack(spacing: DS.Spacing.sm) {
+                    Image(systemName: "lock.fill").foregroundStyle(DS.Colors.textSecondary)
+                    Text(path)
+                        .font(DS.Typography.body).foregroundStyle(DS.Colors.textPrimary)
+                    Spacer()
+                }
+            }
+            Text("VibeOne never reads or writes these. Editing comes later.")
+                .font(DS.Typography.caption)
+                .foregroundStyle(DS.Colors.textSecondary)
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Text("VibeOne")
+                .font(DS.Typography.caption)
+                .foregroundStyle(DS.Colors.textSecondary)
+            Spacer()
+            Button {
+                NSApplication.shared.terminate(nil)
+            } label: {
+                Text("Quit")
+                    .font(DS.Typography.body)
+                    .foregroundStyle(DS.Colors.textSecondary)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private func section(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: DS.Spacing.sm) {
+            Text(title.uppercased())
+                .font(DS.Typography.caption)
+                .foregroundStyle(DS.Colors.textSecondary)
+            content()
         }
     }
 }
