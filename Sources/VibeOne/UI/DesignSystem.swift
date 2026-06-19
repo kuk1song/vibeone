@@ -129,6 +129,11 @@ enum DS {
 
     /// The signature switch animation — the product's silky pill slide.
     static let switchAnimation = Animation.spring(response: 0.3, dampingFraction: 0.72)
+
+    /// How long the popover lingers after a successful switch before it auto-closes
+    /// — brief enough to feel responsive, long enough to read the one-line "Opened
+    /// in …" confirmation before focus hands off to the target agent.
+    static let dismissDelay: Duration = .milliseconds(800)
 }
 
 // MARK: - Components
