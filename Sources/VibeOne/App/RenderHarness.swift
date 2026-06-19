@@ -47,8 +47,10 @@ enum RenderHarness {
         state.projects = sampleProjects()
         state.selection = destination
         state.codexOpensDesktop = codexDesktop
-        // Real config drift for this repo, so the progress line shows a true shape.
-        state.configStatus = ConfigStatus.read(workspace: FileManager.default.currentDirectoryPath)
+        // Sample drift (memory + MCP aligned, skills not) so the segmented bar shows
+        // its lit/unlit contrast — preview data, like the sample projects above, not
+        // this machine's real status.
+        state.configStatus = sampleStatus()
         return state
     }
 
@@ -80,6 +82,19 @@ enum RenderHarness {
                 workspace: "/Users/dev/rag-pipeline",
                 claude: [], codex: [summary(.codex, "rag-pipeline", ago: 90000)]),
         ]
+    }
+
+    /// Sample config drift = 2/3 (memory + MCP aligned, skills not) so the segmented
+    /// status bar renders with visible lit/unlit segments. Preview data only.
+    static func sampleStatus() -> ConfigStatus {
+        ConfigStatus(
+            memory: .init(agentsExists: true, claudeImportsAgents: true),
+            mcp: .init(
+                claudeServers: ["filesystem"], codexServers: ["filesystem"],
+                missingInCodex: [], missingInClaude: [], userScopeServers: []),
+            skills: .init(
+                claudeSkills: ["web-access"], codexSkills: [],
+                missingInCodex: ["web-access"], missingInClaude: []))
     }
 
     static func faceCover(t: Double) -> some View {

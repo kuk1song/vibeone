@@ -46,6 +46,16 @@ public enum SkillsSync {
         public var missingInClaude: [String]  // in Codex, not Claude
 
         public var inSync: Bool { missingInCodex.isEmpty && missingInClaude.isEmpty }
+
+        public init(
+            claudeSkills: [String], codexSkills: [String], missingInCodex: [String],
+            missingInClaude: [String]
+        ) {
+            self.claudeSkills = claudeSkills
+            self.codexSkills = codexSkills
+            self.missingInCodex = missingInCodex
+            self.missingInClaude = missingInClaude
+        }
     }
 
     public static func status(

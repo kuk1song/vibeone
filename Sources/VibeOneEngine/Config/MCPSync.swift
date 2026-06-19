@@ -26,6 +26,17 @@ public enum MCPSync {
         public var userScopeServers: [String]
 
         public var inSync: Bool { missingInCodex.isEmpty && missingInClaude.isEmpty }
+
+        public init(
+            claudeServers: [String], codexServers: [String], missingInCodex: [String],
+            missingInClaude: [String], userScopeServers: [String]
+        ) {
+            self.claudeServers = claudeServers
+            self.codexServers = codexServers
+            self.missingInCodex = missingInCodex
+            self.missingInClaude = missingInClaude
+            self.userScopeServers = userScopeServers
+        }
     }
 
     public static func status(

@@ -48,6 +48,9 @@ final class AppState: ObservableObject {
     /// True while a switch is in flight (guards against a double-launch).
     @Published var isLaunching = false
 
+    /// True while a manual full ‹Sync› is in flight (guards the button).
+    @Published var isSyncing = false
+
     /// Transient one-line outcome of the last switch (success or failure).
     @Published var feedback: String?
 
@@ -165,10 +168,12 @@ final class AppState: ObservableObject {
 
     // MARK: - The switch
 
-    /// Hand the cued source session off to `selection` and open it. The engine
-    /// only ever CREATES a new target session (never mutates the source); opening
-    /// the agent is a separate `AgentLauncher` step (Claude = terminal resume;
-    /// Codex = Desktop deep link by default, or terminal resume).
+    /// Hand the cued source session off to `selection`, sync the project-level
+    /// config so both agents land aligned, and open the target (ADR-013): one
+    /// press, both sides ready. The engine only ever CREATES a new target session
+    /// (never mutates the source); config sync is additive + backed up; opening is
+    /// a separate `AgentLauncher` step (Claude = terminal resume; Codex = Desktop
+    /// deep link by default, or terminal resume).
     func activate() {
         guard let source, !isLaunching else { return }
         // Belt-and-suspenders with the enumeration filter: never act on a denied
@@ -184,6 +189,9 @@ final class AppState: ObservableObject {
         isLaunching = true
         feedback = nil
         let home = home
+        Log.switching.info(
+            "switch → \(destination.rawValue, privacy: .public) [\(self.projectName, privacy: .public)]"
+        )
         Task.detached(priority: .userInitiated) {
             do {
                 let result: SessionHandoff.Result
@@ -195,22 +203,94 @@ final class AppState: ObservableObject {
                     result = try SessionHandoff.codexToClaude(
                         workspace: workspace, source: sourcePath, home: home)
                 }
+                // Auto project-level config sync (memory + project MCP); global
+                // skills are opt-in via the manual ‹Sync›. Runs before opening so
+                // the target lands already aligned.
+                let report = ConfigSync.run(scope: .projectLevel, workspace: workspace, home: home)
                 await MainActor.run {
+                    self.logSyncReport(report)
                     let launch = AgentLauncher.open(
                         agent: destination,
                         sessionId: result.sessionId,
                         resumeCommand: result.resumeCommand,
                         workspace: workspace,
                         codexMode: codexMode)
+                    Log.switching.info("\(launch.message, privacy: .public)")
                     self.isLaunching = false
-                    self.feedback = launch.message
+                    self.feedback = Self.switchLine(launch: launch, sync: report)
+                    self.loadConfig()  // refresh the segmented status after writing
                 }
             } catch {
+                Log.switching.error(
+                    "switch failed: \(error.localizedDescription, privacy: .public)")
                 await MainActor.run {
                     self.isLaunching = false
-                    self.feedback = "Switch failed — \(error)"
+                    self.feedback = Self.switchFailureMessage(error)
                 }
             }
+        }
+    }
+
+    /// Manual FULL config sync (memory + project MCP + machine-wide skills) and
+    /// retry — the ‹Sync› action. Covers the global skills the per-switch path
+    /// deliberately skips, and re-runs anything that failed earlier.
+    func syncAll() {
+        guard let workspace = album?.workspace, !isSyncing else { return }
+        guard !pathGuard.isDenied(workspace) else {
+            feedback = "Blocked — \(projectName) is on the never-touch list"
+            return
+        }
+        isSyncing = true
+        feedback = nil
+        let home = home
+        Log.sync.info("manual full sync [\(self.projectName, privacy: .public)]")
+        Task.detached(priority: .userInitiated) {
+            let report = ConfigSync.run(scope: .full, workspace: workspace, home: home)
+            await MainActor.run {
+                self.logSyncReport(report)
+                self.isSyncing = false
+                self.feedback = report.summaryLine
+                self.loadConfig()
+            }
+        }
+    }
+
+    // MARK: - Observability / messaging
+
+    private func logSyncReport(_ report: ConfigSync.Report) {
+        for item in report.items {
+            if item.failed {
+                Log.sync.error(
+                    "\(item.dimension.rawValue, privacy: .public): \(item.summary, privacy: .public)"
+                )
+            } else {
+                Log.sync.info(
+                    "\(item.dimension.rawValue, privacy: .public): \(item.summary, privacy: .public)"
+                )
+            }
+        }
+    }
+
+    /// The one-line switch outcome: what opened, plus any dimensions that failed
+    /// to sync (a successful sync shows itself by lighting the status segments).
+    private static func switchLine(launch: AgentLauncher.Launch, sync: ConfigSync.Report) -> String
+    {
+        guard !sync.allSucceeded else { return launch.message }
+        let failed = sync.items.filter(\.failed).map(\.dimension.label).joined(separator: ", ")
+        return "\(launch.message) · \(failed) sync failed"
+    }
+
+    /// A short, readable reason a switch failed (full detail goes to the log).
+    private static func switchFailureMessage(_ error: Error) -> String {
+        switch error {
+        case SessionHandoff.Failure.noSessionFound:
+            return "Switch failed — no session to hand off"
+        case SessionHandoff.Failure.emptySession:
+            return "Switch failed — the source session looks empty"
+        case is SessionReadError:
+            return "Switch failed — couldn't read the session"
+        default:
+            return "Switch failed — couldn't write the target session"
         }
     }
 }
