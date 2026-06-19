@@ -8,13 +8,15 @@ import VibeOneEngine
 ///   • ALBUM = project · SONG = session (Claude / Codex are an album's two sides)
 ///   • cover    — the living LED face (`FaceCover`), tinted to the cued DESTINATION
 ///   • title    — "Switch to {destination}" over the project ("now playing")
-///   • progress — a thin line tracking CONFIG SYNC (memory / skills / MCP), a REAL
-///                `ConfigStatus` datum — not a faked playback time
+///   • progress — three SEGMENTS (memory · MCP · skills), each lit when that
+///                dimension is aligned; a ‹Sync› action runs a full manual sync
+///                (incl global skills). A REAL `ConfigStatus` datum, not playback.
+///   • macwindow/terminal — the Codex OPEN-MODE key at the transport's left (the
+///                "mode" slot a player gives repeat/shuffle): Desktop app ⇄
+///                terminal, the icon IS the mode. Dimmed when destination = Claude.
 ///   • ⏮ / ⏭   — flip the destination within this project (Claude ⇄ Codex)
-///   • ▶ play   — SWITCH: hand the current conversation off to the destination and
-///                open it. Nothing switches until play (explicit-select, ADR-008).
-///   • macwindow/terminal — (Codex only) the inline key for where Codex opens:
-///                the Desktop app ⇄ a terminal. The icon IS the current mode.
+///   • ▶ play   — SWITCH: hand the conversation off to the destination, sync the
+///                project-level config, and open it (explicit-select, ADR-008).
 ///   • ☰        — pull up the QUEUE: pick any session across projects
 ///   • ⋯        — pull up SETTINGS: Codex open mode, protected folders, Quit
 ///
@@ -77,78 +79,107 @@ struct PopoverCard: View {
         return [s.memory.inSync, s.mcp.inSync, s.skills.inSync].filter { $0 }.count
     }
 
+    /// Three discrete segments — memory · MCP · skills — each lit when that
+    /// dimension is aligned across both agents. A segmented bar (not a continuous
+    /// fill) so you see WHICH dimension is out of sync at a glance.
     private var progress: some View {
         VStack(spacing: DS.Spacing.xs) {
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(DS.Colors.hairline)
-                    Capsule().fill(accent)
-                        .frame(
-                            width: geo.size.width * CGFloat(syncedDimensions)
-                                / CGFloat(totalDimensions))
-                }
+            HStack(spacing: DS.Spacing.xs) {
+                syncSegment(state.configStatus?.memory.inSync ?? false)
+                syncSegment(state.configStatus?.mcp.inSync ?? false)
+                syncSegment(state.configStatus?.skills.inSync ?? false)
             }
             .frame(height: DS.Size.progressBar)
-            HStack {
+            HStack(spacing: DS.Spacing.sm) {
                 Text("config synced")
                     .font(DS.Typography.caption)
                     .foregroundStyle(DS.Colors.textSecondary)
-                Spacer()
                 Text("\(syncedDimensions)/\(totalDimensions)")
                     .font(DS.Typography.caption)
                     .foregroundStyle(DS.Colors.textSecondary)
+                Spacer()
+                syncButton
             }
         }
+    }
+
+    private func syncSegment(_ lit: Bool) -> some View {
+        Capsule()
+            .fill(lit ? accent : DS.Colors.hairline)
+            .frame(maxWidth: .infinity)
+    }
+
+    /// Manual FULL sync (memory + MCP + global skills) / retry — the one config
+    /// write the auto-on-switch path doesn't cover (global skills). Co-located with
+    /// the status it acts on, and deliberately NOT a circular-arrows transport key
+    /// (those read as "repeat" in a player). Wired with the apply slice.
+    private var syncButton: some View {
+        Button {
+            state.syncAll()
+        } label: {
+            HStack(spacing: DS.Spacing.xs) {
+                Image(systemName: "arrow.left.arrow.right")
+                Text(state.isSyncing ? "Syncing…" : "Sync")
+            }
+            .font(DS.Typography.caption)
+            .foregroundStyle(accent)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(state.isSyncing)
+        .opacity(state.isSyncing ? DS.Opacity.disabled : 1)
     }
 
     // MARK: - Transport
 
     private var transport: some View {
         HStack(spacing: DS.Spacing.md) {
-            TransportButton(symbol: "arrow.triangle.2.circlepath") {}  // config apply (later)
+            modeKey
             TransportButton(symbol: "backward.end.fill") { flip() }
             PlayButton(agent: destination) { state.activate() }
                 .disabled(!state.canSwitch)
                 .opacity(state.canSwitch ? 1 : DS.Opacity.disabled)
             TransportButton(symbol: "forward.end.fill") { flip() }
-            TransportButton(symbol: "ellipsis") {
-                withAnimation(DS.switchAnimation) { state.settingsOpen = true }
-            }
-        }
-    }
-
-    /// Second row aligned under the transport: the Codex mode key (under ⏮, Codex-
-    /// only) and the QUEUE button under ⋯ that pulls up session selection.
-    private var secondary: some View {
-        HStack(spacing: DS.Spacing.md) {
-            TransportButton(symbol: "slider.horizontal.3") {}  // config detail (later)
-            modeKey
-            Color.clear
-                .frame(width: DS.Size.playButton, height: DS.Size.transportButton)
-            Color.clear
-                .frame(width: DS.Size.transportButton, height: DS.Size.transportButton)
             TransportButton(symbol: "music.note.list") {
                 withAnimation(DS.switchAnimation) { state.queueOpen = true }
             }
         }
     }
 
-    /// Codex-only inline toggle: the icon IS the current mode — `macwindow` (open in
-    /// the Desktop app) ⇄ `terminal` (open in the CLI). Accent-tinted so it reads as
-    /// a live control; a blank slot keeps the row stable when the destination is
-    /// Claude (always a terminal).
+    /// Second row aligned under the transport. Most slots are intentionally empty —
+    /// whitespace keeps ▶ dominant; only SETTINGS sits here, under the queue (⋯).
+    private var secondary: some View {
+        HStack(spacing: DS.Spacing.md) {
+            clearSlot(DS.Size.transportButton)  // under the mode key
+            clearSlot(DS.Size.transportButton)  // under ⏮
+            clearSlot(DS.Size.playButton)  // under ▶
+            clearSlot(DS.Size.transportButton)  // under ⏭
+            TransportButton(symbol: "ellipsis") {
+                withAnimation(DS.switchAnimation) { state.settingsOpen = true }
+            }
+        }
+    }
+
+    private func clearSlot(_ width: CGFloat) -> some View {
+        Color.clear.frame(width: width, height: DS.Size.transportButton)
+    }
+
+    /// The Codex OPEN-MODE key — the "mode" control a player gives to repeat/
+    /// shuffle, here at the transport's left. The icon IS the current mode:
+    /// `macwindow` (Desktop app) ⇄ `terminal` (CLI). Only Codex has two open modes,
+    /// so when the destination is Claude (always a terminal) it's disabled + dimmed
+    /// rather than blank, keeping the row stable.
     @ViewBuilder
     private var modeKey: some View {
-        if destination == .codex {
-            TransportButton(
-                symbol: state.codexOpensDesktop ? "macwindow" : "terminal", tint: accent
-            ) {
-                withAnimation(DS.switchAnimation) { state.toggleCodexMode() }
-            }
-        } else {
-            Color.clear
-                .frame(width: DS.Size.transportButton, height: DS.Size.transportButton)
+        let isCodex = destination == .codex
+        TransportButton(
+            symbol: state.codexOpensDesktop ? "macwindow" : "terminal",
+            tint: isCodex ? accent : DS.Colors.textSecondary
+        ) {
+            withAnimation(DS.switchAnimation) { state.toggleCodexMode() }
         }
+        .disabled(!isCodex)
+        .opacity(isCodex ? 1 : DS.Opacity.disabled)
     }
 
     /// One transient line confirming the last switch (or its failure).
