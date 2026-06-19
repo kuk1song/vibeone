@@ -106,6 +106,10 @@ public enum ClaudeSession {
                 "cwd": options.cwd,
                 "version": options.version,
                 "timestamp": options.timestamp(),
+                // Provenance: mark this as VibeOne-written so the picker can keep it
+                // pickable yet never auto-pick it as a handoff source (PR-F). Claude
+                // ignores unknown top-level keys (PARSERS §1).
+                Provenance.claudeKey: Provenance.vibeOne,
             ]
 
             var message: [String: Any] = ["role": msg.role.rawValue]

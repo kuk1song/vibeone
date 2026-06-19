@@ -51,7 +51,8 @@ public struct CodexSessionStore: SessionStore {
             out.append(
                 SessionSummary(
                     agent: agent, id: meta.id, workspace: meta.cwd,
-                    path: url, modified: modifiedDate(url)))
+                    path: url, modified: modifiedDate(url),
+                    generatedByVibeOne: meta.originator == Provenance.vibeOne))
         }
         return out.sorted { $0.modified != $1.modified ? $0.modified > $1.modified : $0.id < $1.id }
     }
@@ -81,10 +82,11 @@ public struct CodexSessionStore: SessionStore {
 
     // MARK: - Helpers
 
-    /// `(id, cwd)` from a rollout's `session_meta` — its first line — read via a
-    /// bounded head read (no whole-file load). Nil unless line 1 is a `session_meta`
-    /// carrying both fields.
-    private func meta(of url: URL) -> (id: String, cwd: String)? {
+    /// `(id, cwd, originator)` from a rollout's `session_meta` — its first line —
+    /// read via a bounded head read (no whole-file load). Nil unless line 1 is a
+    /// `session_meta` carrying both `id` and `cwd`; `originator` is optional (it
+    /// identifies a VibeOne-written rollout, PARSERS §3).
+    private func meta(of url: URL) -> (id: String, cwd: String, originator: String?)? {
         guard
             let firstLine = FileHead.lines(of: url).first,
             let obj = try? JSONSerialization.jsonObject(with: Data(firstLine.utf8))
@@ -94,7 +96,7 @@ public struct CodexSessionStore: SessionStore {
             let id = payload["id"] as? String, !id.isEmpty,
             let cwd = payload["cwd"] as? String, !cwd.isEmpty
         else { return nil }
-        return (id, cwd)
+        return (id, cwd, payload["originator"] as? String)
     }
 
     /// Recorded `cwd` of a rollout (for source-side workspace matching).

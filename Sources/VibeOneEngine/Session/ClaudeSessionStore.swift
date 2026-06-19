@@ -51,15 +51,19 @@ public struct ClaudeSessionStore: SessionStore {
                     at: dir, includingPropertiesForKeys: [.contentModificationDateKey])
             else { continue }
             let transcripts = entries.filter { $0.pathExtension == "jsonl" }
-            guard let workspace = transcripts.lazy.compactMap(workspaceOf).first else { continue }
-            for url in transcripts {
+            // Read each transcript's head once: all in a dir share one cwd, but the
+            // VibeOne mark is per-file (a copy lands beside the user's own sessions).
+            let headers = transcripts.map { (url: $0, header: header(of: $0)) }
+            guard let workspace = headers.lazy.compactMap({ $0.header.cwd }).first else { continue }
+            for entry in headers {
                 out.append(
                     SessionSummary(
                         agent: agent,
-                        id: url.deletingPathExtension().lastPathComponent,
+                        id: entry.url.deletingPathExtension().lastPathComponent,
                         workspace: workspace,
-                        path: url,
-                        modified: modifiedDate(url)))
+                        path: entry.url,
+                        modified: modifiedDate(entry.url),
+                        generatedByVibeOne: entry.header.generated))
             }
         }
         return out.sorted { $0.modified != $1.modified ? $0.modified > $1.modified : $0.id < $1.id }
@@ -127,19 +131,26 @@ public struct ClaudeSessionStore: SessionStore {
             .first?.url
     }
 
-    /// First recorded `cwd` in a transcript (its project root). Claude stamps every
-    /// user/assistant line with `cwd`, so the first one suffices — and it lands in
-    /// the first few lines, so a bounded head read avoids loading a large transcript.
-    private func workspaceOf(_ url: URL) -> String? {
+    /// A transcript's project root (its first recorded `cwd`) and whether VibeOne
+    /// wrote it (any line carries the `Provenance` mark). Claude stamps both on its
+    /// lines, and they land in the first few, so a bounded head read avoids loading
+    /// a large transcript.
+    private func header(of url: URL) -> (cwd: String?, generated: Bool) {
+        var cwd: String?
+        var generated = false
         for raw in FileHead.lines(of: url) {
             guard
-                let obj = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
-                let cwd = obj["cwd"] as? String, !cwd.isEmpty
+                let obj = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any]
             else { continue }
-            return cwd
+            if cwd == nil, let value = obj["cwd"] as? String, !value.isEmpty { cwd = value }
+            if (obj[Provenance.claudeKey] as? String) == Provenance.vibeOne { generated = true }
+            if cwd != nil && generated { break }
         }
-        return nil
+        return (cwd, generated)
     }
+
+    /// First recorded `cwd` in a transcript (its project root).
+    private func workspaceOf(_ url: URL) -> String? { header(of: url).cwd }
 
     private func modifiedDate(_ url: URL) -> Date {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
