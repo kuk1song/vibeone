@@ -49,10 +49,68 @@ final class MemorySyncTests: XCTestCase {
 
     // MARK: - Apply
 
-    func testApplyThrowsWhenNoAuthoritativeMemory() {
-        XCTAssertThrowsError(try MemorySync.apply(workspace: ws.path)) { error in
-            XCTAssertEqual(error as? MemorySync.Failure, .noAuthoritativeMemory)
+    func testApplyIsNoMemoryWhenNeitherFileExists() throws {
+        // An empty project has nothing authoritative to sync — a clean no-op,
+        // not an error (the ▶ switch must not fail on a memory-less project).
+        XCTAssertEqual(try MemorySync.apply(workspace: ws.path), .noMemory)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: ws.appendingPathComponent("AGENTS.md").path),
+            "no AGENTS.md should be conjured from nothing")
+    }
+
+    func testApplyAdoptsClaudeContentWhenNoAgents() throws {
+        // The Claude-first user: a real CLAUDE.md, no AGENTS.md yet. Adopt makes
+        // AGENTS.md authoritative (seeded from CLAUDE.md), then leaves CLAUDE.md
+        // as a pure import so both agents resolve to one brain.
+        try write("CLAUDE.md", "# project rules\nbe terse\n")
+
+        let outcome = try MemorySync.apply(workspace: ws.path, timestamp: { "TS" })
+        guard case .adopted(let backup) = outcome else {
+            return XCTFail("expected .adopted, got \(outcome)")
         }
+
+        let agents = try String(
+            contentsOf: ws.appendingPathComponent("AGENTS.md"), encoding: .utf8)
+        XCTAssertEqual(agents, "# project rules\nbe terse\n", "AGENTS.md seeded verbatim")
+
+        let claude = try String(
+            contentsOf: ws.appendingPathComponent("CLAUDE.md"), encoding: .utf8)
+        XCTAssertEqual(claude, "@AGENTS.md\n", "CLAUDE.md reduced to a pure import")
+
+        let backupURL = try XCTUnwrap(backup)
+        XCTAssertEqual(
+            try String(contentsOf: backupURL, encoding: .utf8), "# project rules\nbe terse\n",
+            "the pre-adopt CLAUDE.md is recoverable")
+
+        XCTAssertTrue(MemorySync.status(workspace: ws.path).inSync)
+    }
+
+    func testApplyAdoptStripsDanglingImportFromSeededAgents() throws {
+        // CLAUDE.md imports a now-missing AGENTS.md but still carries real notes.
+        // Adopt must seed AGENTS.md with the notes only — never the self-import.
+        try write("CLAUDE.md", "@AGENTS.md\n\nreal notes\n")
+
+        let outcome = try MemorySync.apply(workspace: ws.path, timestamp: { "TS" })
+        guard case .adopted = outcome else {
+            return XCTFail("expected .adopted, got \(outcome)")
+        }
+        let agents = try String(
+            contentsOf: ws.appendingPathComponent("AGENTS.md"), encoding: .utf8)
+        XCTAssertEqual(agents, "real notes\n")
+        XCTAssertFalse(agents.contains("@AGENTS.md"), "no self-referential import in AGENTS.md")
+        XCTAssertTrue(MemorySync.status(workspace: ws.path).inSync)
+    }
+
+    func testApplyIsNoMemoryWhenClaudeIsOnlyADanglingImport() throws {
+        // CLAUDE.md points at a missing AGENTS.md and has nothing else — there is
+        // no real content to adopt, so this is a no-op (and nothing is written).
+        try write("CLAUDE.md", "@AGENTS.md\n")
+        XCTAssertEqual(try MemorySync.apply(workspace: ws.path), .noMemory)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: ws.appendingPathComponent("AGENTS.md").path))
+        XCTAssertEqual(
+            try String(contentsOf: ws.appendingPathComponent("CLAUDE.md"), encoding: .utf8),
+            "@AGENTS.md\n", "CLAUDE.md is left untouched")
     }
 
     func testApplyCreatesImportWhenNoClaudeMd() throws {
