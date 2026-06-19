@@ -101,7 +101,7 @@ public enum CodexSession {
             sessionId: String,
             cwd: String,
             modelProvider: String = "openai",
-            originator: String = "vibeone",
+            originator: String = Provenance.vibeOne,
             cliVersion: String = "0.1.0",
             timestamp: @escaping () -> String = { ISO8601DateFormatter().string(from: Date()) }
         ) {

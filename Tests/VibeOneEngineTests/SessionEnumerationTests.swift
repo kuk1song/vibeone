@@ -42,7 +42,8 @@ private func writeClaude(
 @discardableResult
 private func writeCodex(
     home: URL, workspace: String, id: String, date: Date,
-    messages: [(CanonicalMessage.Role, String)] = [(.user, "hi")], modified: Date
+    messages: [(CanonicalMessage.Role, String)] = [(.user, "hi")],
+    originator: String = Provenance.vibeOne, modified: Date
 ) throws -> URL {
     let url = SessionLocation.codexRolloutURL(home: home, date: date, sessionId: id)
     try FileManager.default.createDirectory(
@@ -51,8 +52,24 @@ private func writeCodex(
         sourceAgent: "codex", workspace: workspace, model: "gpt-5.4",
         messages: messages.map { CanonicalMessage(role: $0.0, text: $0.1) })
     let jsonl = CodexSession.write(
-        session, options: .init(sessionId: id, cwd: workspace, timestamp: { "t" }))
+        session,
+        options: .init(sessionId: id, cwd: workspace, originator: originator, timestamp: { "t" }))
     try jsonl.write(to: url, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+    return url
+}
+
+/// A bare real-style transcript: a single user line carrying `cwd` but NO VibeOne
+/// mark — i.e. a session the user, not VibeOne, created.
+@discardableResult
+private func writeUnmarkedClaude(home: URL, workspace: String, id: String, modified: Date) throws
+    -> URL
+{
+    let url = SessionLocation.claudeSessionURL(home: home, workspace: workspace, sessionId: id)
+    try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try #"{"type":"user","cwd":"\#(workspace)","message":{"role":"user","content":"hi"}}"#
+        .write(to: url, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
     return url
 }
@@ -114,6 +131,24 @@ struct ClaudeListTests {
         defer { try? FileManager.default.removeItem(at: home) }
         #expect(ClaudeSessionStore(home: home).list().isEmpty)
     }
+
+    @Test("flags VibeOne-written transcripts; treats unmarked ones as the user's own")
+    func flagsGeneratedPerFile() throws {
+        let home = try makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let ws = "/Users/kuki/proj"
+        // Both land in the same project dir (shared cwd): one VibeOne copy (the real
+        // writer stamps the mark), one bare real session (no mark). The flag must be
+        // per-file, not per-dir.
+        try writeClaude(home: home, workspace: ws, id: "mine", modified: at(2000))
+        try writeUnmarkedClaude(home: home, workspace: ws, id: "real", modified: at(1000))
+
+        let flagById = Dictionary(
+            grouping: ClaudeSessionStore(home: home).list(), by: \.id
+        ).mapValues { $0[0].generatedByVibeOne }
+        #expect(flagById["mine"] == true)
+        #expect(flagById["real"] == false)
+    }
 }
 
 // MARK: - Codex enumeration
@@ -159,6 +194,23 @@ struct CodexListTests {
         let home = try makeTempHome()
         defer { try? FileManager.default.removeItem(at: home) }
         #expect(CodexSessionStore(home: home).list().isEmpty)
+    }
+
+    @Test("flags VibeOne-written rollouts by their session_meta originator")
+    func flagsGeneratedByOriginator() throws {
+        let home = try makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let ws = "/Users/kuki/proj"
+        try writeCodex(home: home, workspace: ws, id: "mine", date: at(0), modified: at(2000))
+        try writeCodex(
+            home: home, workspace: ws, id: "real", date: at(0),
+            originator: "codex", modified: at(1000))
+
+        let flagById = Dictionary(
+            grouping: CodexSessionStore(home: home).list(), by: \.id
+        ).mapValues { $0[0].generatedByVibeOne }
+        #expect(flagById["mine"] == true)
+        #expect(flagById["real"] == false)
     }
 }
 
@@ -210,6 +262,24 @@ struct ProjectSessionsTests {
         let home = try makeTempHome()
         defer { try? FileManager.default.removeItem(at: home) }
         #expect(SessionHandoff.projectSessions(home: home).isEmpty)
+    }
+
+    @Test("a handed-off session is flagged generated when re-enumerated (closes the echo)")
+    func handoffOutputIsFlagged() throws {
+        let home = try makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let ws = "/Users/kuki/proj"
+        // Hand off the user's own (unmarked) Claude session to Codex, both ways the
+        // real switch runs it; the new copies must come back marked as VibeOne's.
+        let real = try writeUnmarkedClaude(home: home, workspace: ws, id: "src", modified: at(1000))
+        _ = try SessionHandoff.claudeToCodex(workspace: ws, source: real, home: home)
+
+        let codex = CodexSessionStore(home: home).list()
+        #expect(codex.count == 1)
+        #expect(codex.first?.generatedByVibeOne == true)
+        // The source the user owns is still seen as their own.
+        let claude = ClaudeSessionStore(home: home).list()
+        #expect(claude.first { $0.id == "src" }?.generatedByVibeOne == false)
     }
 
     @Test("hides workspaces matched by the safety deny-list")

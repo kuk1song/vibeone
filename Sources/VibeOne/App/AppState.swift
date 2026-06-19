@@ -89,10 +89,16 @@ final class AppState: ObservableObject {
     /// The session that would be handed off: the user's exact pick, else the
     /// newest session on the side OPPOSITE the cued destination — you switch FROM
     /// the other agent INTO `selection`.
+    ///
+    /// The default skips VibeOne's own handoff copies (it prefers the user's most
+    /// recent real session), so pressing ▶ right after a switch never hands a copy
+    /// straight back. A copy is still reachable — explicitly pick it from the queue
+    /// to switch work you continued inside a handed-off session back (PR-F).
     var source: SessionSummary? {
         if let pinnedSource { return pinnedSource }
         guard let album else { return nil }
-        return selection == .codex ? album.claude.first : album.codex.first
+        let candidates = selection == .codex ? album.claude : album.codex
+        return candidates.first { !$0.generatedByVibeOne } ?? candidates.first
     }
 
     /// Play is possible only with a real source session and no switch in flight.
@@ -298,9 +304,15 @@ final class AppState: ObservableObject {
 extension SessionHandoff.ProjectSessions {
     /// The agent this project was most recently active in — drives the default cue
     /// (you most likely want to switch AWAY from where you just were).
+    ///
+    /// "Most recent" counts the user's OWN sessions, not VibeOne's handoff copies:
+    /// a copy is the newest file right after a switch and would otherwise always
+    /// flip the cue the wrong way (back toward the copy). Falls back to the newest
+    /// of any kind if a side has only copies (PR-F).
     fileprivate var latestAgent: Agent {
-        let claudeAt = claude.first?.modified ?? .distantPast
-        let codexAt = codex.first?.modified ?? .distantPast
-        return codexAt > claudeAt ? .codex : .claude
+        func recency(_ sessions: [SessionSummary]) -> Date {
+            (sessions.first { !$0.generatedByVibeOne } ?? sessions.first)?.modified ?? .distantPast
+        }
+        return recency(codex) > recency(claude) ? .codex : .claude
     }
 }

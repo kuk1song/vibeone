@@ -55,13 +55,23 @@ public struct SessionSummary: Equatable, Sendable, Identifiable {
     public var path: URL
     /// File modification time — recency for ordering the picker.
     public var modified: Date
+    /// True if VibeOne generated this session during a handoff (its file carries
+    /// the `Provenance.vibeOne` mark; PARSERS §1/§3). Such copies stay listed and
+    /// pickable, but are never the *default* handoff source — that stops a copy
+    /// from being silently re-handed-off into an ever-growing echo (PR-F).
+    /// Defaults false: an unmarked session is treated as the user's own.
+    public var generatedByVibeOne: Bool
 
-    public init(agent: String, id: String, workspace: String, path: URL, modified: Date) {
+    public init(
+        agent: String, id: String, workspace: String, path: URL, modified: Date,
+        generatedByVibeOne: Bool = false
+    ) {
         self.agent = agent
         self.id = id
         self.workspace = workspace
         self.path = path
         self.modified = modified
+        self.generatedByVibeOne = generatedByVibeOne
     }
 }
 

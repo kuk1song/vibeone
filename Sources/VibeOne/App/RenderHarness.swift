@@ -63,18 +63,27 @@ enum RenderHarness {
     /// Ages are relative to launch so the "Nm/Nh/Nd ago" labels read naturally.
     static func sampleProjects() -> [SessionHandoff.ProjectSessions] {
         let now = Date()
-        func summary(_ agent: Agent, _ project: String, ago: TimeInterval) -> SessionSummary {
+        func summary(_ agent: Agent, _ project: String, ago: TimeInterval, generated: Bool = false)
+            -> SessionSummary
+        {
             SessionSummary(
-                agent: agent.rawValue, id: "\(agent.rawValue)-\(project)",
+                agent: agent.rawValue,
+                id: "\(agent.rawValue)-\(project)\(generated ? "-copy" : "")",
                 workspace: "/Users/dev/\(project)",
                 path: URL(fileURLWithPath: "/tmp/\(agent.rawValue)-\(project).jsonl"),
-                modified: now.addingTimeInterval(-ago))
+                modified: now.addingTimeInterval(-ago),
+                generatedByVibeOne: generated)
         }
         return [
             .init(
                 workspace: "/Users/dev/slash-stage",
                 claude: [summary(.claude, "slash-stage", ago: 120)],
-                codex: [summary(.codex, "slash-stage", ago: 3600)]),
+                // A VibeOne handoff copy (newest) plus the user's own session: the
+                // queue lists both, but the player default skips the copy (PR-F).
+                codex: [
+                    summary(.codex, "slash-stage", ago: 60, generated: true),
+                    summary(.codex, "slash-stage", ago: 3600),
+                ]),
             .init(
                 workspace: "/Users/dev/PrivateGpt",
                 claude: [summary(.claude, "PrivateGpt", ago: 10800)], codex: []),
