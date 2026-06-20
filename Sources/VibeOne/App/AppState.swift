@@ -122,6 +122,9 @@ final class AppState: ObservableObject {
                 self.projects = projects
                 self.albumIndex = min(self.albumIndex, max(0, projects.count - 1))
                 self.pinnedSource = nil
+                // Re-opening the popover is a fresh start: drop any leftover "Opened
+                // in …" line from the switch that just auto-closed it.
+                self.feedback = nil
                 // Default cue: switch AWAY from the album's most recent agent.
                 if let album = self.album { self.selection = album.latestAgent.other }
                 self.loadConfig()
@@ -225,6 +228,16 @@ final class AppState: ObservableObject {
                     self.isLaunching = false
                     self.feedback = Self.switchLine(launch: launch, sync: report)
                     self.loadConfig()  // refresh the segmented status after writing
+                    // A real open hands focus to the target agent; get the popover
+                    // out of the way after a beat (so the confirmation line reads).
+                    // If nothing opened, keep it up — the fallback command must stay
+                    // visible (and a failure, handled below, also keeps it up).
+                    if launch.opened {
+                        Task { @MainActor in
+                            try? await Task.sleep(for: DS.dismissDelay)
+                            MenuBarPopover.dismiss()
+                        }
+                    }
                 }
             } catch {
                 Log.switching.error(
