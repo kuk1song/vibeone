@@ -37,12 +37,13 @@ enum DS {
     // MARK: Size (layout dimensions kept out of the views)
 
     enum Size {
-        static let cardWidth: CGFloat = 320  // the popover content width
+        static let cardWidth: CGFloat = 264  // the popover content width
         static let brandMark: CGFloat = 32  // header logo tile
 
-        // "Now playing" player (ADR-006).
-        static let playerCover: CGFloat = 132  // the LED-face album cover (square)
-        static let playButton: CGFloat = 50  // centered big launch circle
+        // "Now playing" player (ADR-006 / ADR-014).
+        static let playerCover: CGFloat = 132  // square LED-face cover (empty state)
+        static let playerBanner: CGFloat = 160  // wide LED-banner cover height (player)
+        static let playButton: CGFloat = 45  // centered big launch circle
         static let transportButton: CGFloat = 32  // side icon buttons
         static let progressBar: CGFloat = 3  // config-sync progress line height
 
@@ -76,9 +77,11 @@ enum DS {
         /// non-adaptive surface — it is the "screen" the mascot lives on.
         static let facePanel = Color(hex: 0x0C0C0E)
 
-        // Brand accents (token-exact). #D97757 Claude / #10A37F Codex.
+        // Brand accents (token-exact). #D97757 Claude / #6C81FF Codex — the
+        // periwinkle-indigo of Codex's current app icon (sampled from the shipping
+        // icon; OpenAI's 2025 identity moved off the legacy #10A37F green).
         static let accentClaude = Color(hex: 0xD97757)
-        static let accentCodex = Color(hex: 0x10A37F)
+        static let accentCodex = Color(hex: 0x6C81FF)
 
         /// Logo gradient (orange -> pink) — the VibeOne brand mark fill.
         static let brandGradient = LinearGradient(
@@ -100,7 +103,7 @@ enum DS {
             let stops: [Color]
             switch agent {
             case .claude: stops = [accentClaude, Color(hex: 0xE8946F)]
-            case .codex: stops = [accentCodex, Color(hex: 0x1FBF95)]
+            case .codex: stops = [accentCodex, Color(hex: 0x9AAAFF)]
             }
             return LinearGradient(
                 colors: stops,
@@ -130,9 +133,10 @@ enum DS {
     /// The signature switch animation — the product's silky pill slide.
     static let switchAnimation = Animation.spring(response: 0.3, dampingFraction: 0.72)
 
-    /// How long the popover lingers after a successful switch before it auto-closes
-    /// — brief enough to feel responsive, long enough to read the one-line "Opened
-    /// in …" confirmation before focus hands off to the target agent.
+    /// Minimum lingering time after a successful switch before the popover
+    /// auto-closes — long enough to read the one-line "Opened in …" confirmation.
+    /// The actual close waits for the LONGER of this and the ▶ reaction finishing
+    /// (`FaceCover.reactionDuration`), so the "alive" beat is never cut off.
     static let dismissDelay: Duration = .milliseconds(800)
 }
 
@@ -289,7 +293,7 @@ struct PlayButton: View {
             }
         }
         .buttonStyle(.plain)
-        .shadow(color: DS.Colors.accent(for: agent).opacity(0.5), radius: 12, y: 4)
+        // No glow — the play circle reads on its own (tuned to a flat finish).
     }
 }
 

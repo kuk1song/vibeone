@@ -50,8 +50,9 @@ struct PopoverCard: View {
 
     private var player: some View {
         VStack(spacing: DS.Spacing.md) {
-            FaceCover(accent: accent)
-                .frame(width: DS.Size.playerCover, height: DS.Size.playerCover)
+            FaceCover(accent: accent, reactionStart: state.reactionStart)
+                .frame(maxWidth: .infinity)
+                .frame(height: DS.Size.playerBanner)
                 .padding(.top, DS.Spacing.sm)
 
             VStack(spacing: DS.Spacing.xs) {
@@ -64,9 +65,7 @@ struct PopoverCard: View {
             }
 
             progress
-            transport
-            secondary
-            feedback
+            controls
         }
         .padding(DS.Spacing.lg)
     }
@@ -130,38 +129,52 @@ struct PopoverCard: View {
         .opacity(state.isSyncing ? DS.Opacity.disabled : 1)
     }
 
-    // MARK: - Transport
+    // MARK: - Controls (transport + the settings row beneath it)
 
+    private var controls: some View {
+        VStack(spacing: DS.Spacing.sm) {
+            transport
+            secondary
+        }
+    }
+
+    /// Spread full-width like a player's now-playing transport (Spotify / Apple
+    /// Music): five controls distributed edge-to-edge with equal gaps, so ▶ lands
+    /// dead-centre as the visual anchor and the modal keys (open-mode · queue) sit at
+    /// the symmetric left/right rims — a balanced row, not a left cluster.
     private var transport: some View {
-        HStack(spacing: DS.Spacing.md) {
+        HStack(spacing: 0) {
             modeKey
+            Spacer(minLength: DS.Spacing.sm)
             TransportButton(symbol: "backward.end.fill") { flip() }
+            Spacer(minLength: DS.Spacing.sm)
             PlayButton(agent: destination) { state.activate() }
                 .disabled(!state.canSwitch)
                 .opacity(state.canSwitch ? 1 : DS.Opacity.disabled)
+            Spacer(minLength: DS.Spacing.sm)
             TransportButton(symbol: "forward.end.fill") { flip() }
+            Spacer(minLength: DS.Spacing.sm)
             TransportButton(symbol: "music.note.list") {
                 withAnimation(DS.switchAnimation) { state.queueOpen = true }
             }
         }
     }
 
-    /// Second row aligned under the transport. Most slots are intentionally empty —
-    /// whitespace keeps ▶ dominant; only SETTINGS sits here, under the queue (⋯).
+    /// The utility row beneath the transport (Spotify's bottom row): the transient
+    /// switch confirmation sits at the left rim (under the open-mode key), ⋯
+    /// (SETTINGS) at the right rim — directly under ☰ (QUEUE), both 32pt frames.
     private var secondary: some View {
-        HStack(spacing: DS.Spacing.md) {
-            clearSlot(DS.Size.transportButton)  // under the mode key
-            clearSlot(DS.Size.transportButton)  // under ⏮
-            clearSlot(DS.Size.playButton)  // under ▶
-            clearSlot(DS.Size.transportButton)  // under ⏭
+        HStack(spacing: 0) {
+            Text(state.feedback ?? " ")
+                .font(DS.Typography.caption)
+                .foregroundStyle(accent)
+                .opacity(state.feedback == nil ? 0 : 1)
+                .lineLimit(1)
+            Spacer(minLength: DS.Spacing.sm)
             TransportButton(symbol: "ellipsis") {
                 withAnimation(DS.switchAnimation) { state.settingsOpen = true }
             }
         }
-    }
-
-    private func clearSlot(_ width: CGFloat) -> some View {
-        Color.clear.frame(width: width, height: DS.Size.transportButton)
     }
 
     /// The Codex OPEN-MODE key — the "mode" control a player gives to repeat/
@@ -180,15 +193,6 @@ struct PopoverCard: View {
         }
         .disabled(!isCodex)
         .opacity(isCodex ? 1 : DS.Opacity.disabled)
-    }
-
-    /// One transient line confirming the last switch (or its failure).
-    private var feedback: some View {
-        Text(state.feedback ?? " ")
-            .font(DS.Typography.caption)
-            .foregroundStyle(accent)
-            .opacity(state.feedback == nil ? 0 : 1)
-            .lineLimit(1)
     }
 
     private func flip() {

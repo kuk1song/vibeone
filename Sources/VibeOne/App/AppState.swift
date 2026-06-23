@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import VibeOneEngine
 
@@ -53,6 +54,10 @@ final class AppState: ObservableObject {
 
     /// Transient one-line outcome of the last switch (success or failure).
     @Published var feedback: String?
+
+    /// Reference-time of the last ▶ press — the face watches this to play its brief
+    /// happy reaction so a switch feels alive (set on press, ignored after the beat).
+    @Published var reactionStart: Double?
 
     /// Folders VibeOne must never touch (ADR-012). Shown read-only in Settings; the
     /// editor lands later. The default preset guards the work tree.
@@ -197,6 +202,8 @@ final class AppState: ObservableObject {
         let codexMode: AgentLauncher.CodexMode = codexOpensDesktop ? .desktop : .terminal
         isLaunching = true
         feedback = nil
+        reactionStart = Date.timeIntervalSinceReferenceDate  // kick the face's happy reaction
+
         let home = home
         Log.switching.info(
             "switch → \(destination.rawValue, privacy: .public) [\(self.projectName, privacy: .public)]"
@@ -229,12 +236,23 @@ final class AppState: ObservableObject {
                     self.feedback = Self.switchLine(launch: launch, sync: report)
                     self.loadConfig()  // refresh the segmented status after writing
                     // A real open hands focus to the target agent; get the popover
-                    // out of the way after a beat (so the confirmation line reads).
-                    // If nothing opened, keep it up — the fallback command must stay
-                    // visible (and a failure, handled below, also keeps it up).
+                    // out of the way once the confirmation line has had a beat to
+                    // read — but never before the ▶ reaction finishes, so the "alive"
+                    // beat is never cut off mid-squint. If nothing opened, keep it up
+                    // — the fallback command must stay visible (and a failure, handled
+                    // below, also keeps it up).
                     if launch.opened {
+                        let reactionStart = self.reactionStart
+                        // No reaction plays under Reduce Motion, so don't wait for one.
+                        let reduceMotion =
+                            NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
                         Task { @MainActor in
-                            try? await Task.sleep(for: DS.dismissDelay)
+                            let elapsed =
+                                Date.timeIntervalSinceReferenceDate - (reactionStart ?? 0)
+                            let reactionLeft =
+                                reduceMotion ? 0 : max(0, FaceCover.reactionDuration - elapsed)
+                            try? await Task.sleep(
+                                for: max(DS.dismissDelay, .seconds(reactionLeft)))
                             MenuBarPopover.dismiss()
                         }
                     }

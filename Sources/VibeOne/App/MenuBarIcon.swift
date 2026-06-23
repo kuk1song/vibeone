@@ -11,7 +11,7 @@ import SwiftUI
 ///
 /// The macOS menu bar would tint a *template* image to a flat monochrome color,
 /// throwing away our accent — so we render a NON-template, colored image. The
-/// accents (#D97757 / #10A37F) are mid-tone and reasonably saturated, so they
+/// accents (#D97757 / #6C81FF) are mid-tone and reasonably saturated, so they
 /// read on both light and dark menu bars.
 ///
 /// The coordinates below are this icon's own ~20×16 canvas (illustration path
