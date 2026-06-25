@@ -438,12 +438,23 @@ struct SettingsPanel: View {
             Text("VibeOne never reads or writes these. Editing comes later.")
                 .font(DS.Typography.caption)
                 .foregroundStyle(DS.Colors.textSecondary)
+                // Wrap to multiple lines: the live MenuBarExtra window otherwise
+                // proposes the text's single-line width and truncates it.
+                .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// Marketing version from the bundle's Info.plist; "dev" under `swift run`
+    /// (a bare executable carries no bundle, so no version).
+    private var versionLabel: String {
+        guard let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        else { return "dev" }
+        return "v\(v)"
     }
 
     private var footer: some View {
         HStack {
-            Text("VibeOne")
+            Text("VibeOne \(versionLabel)")
                 .font(DS.Typography.caption)
                 .foregroundStyle(DS.Colors.textSecondary)
             Spacer()
