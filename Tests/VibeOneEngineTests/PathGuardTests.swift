@@ -115,6 +115,17 @@ import Testing
         }
     }
 
+    @Test func deniesMultipleRoots() throws {
+        try withHome { home in
+            // The editor lets a user add more than the preset; a multi-entry list
+            // must guard under EACH root, while unrelated paths stay allowed.
+            let guard1 = PathGuard(deniedPaths: ["~/ot", "~/projects/foo"], home: home)
+            #expect(guard1.isDenied(home.appendingPathComponent("ot/work/repo").path))
+            #expect(guard1.isDenied(home.appendingPathComponent("projects/foo").path))
+            #expect(!guard1.isDenied(home.appendingPathComponent("other").path))
+        }
+    }
+
     @Test func presetGuardsWorkTree() throws {
         try withHome { home in
             // The default preset every user starts with denies ~/ot.

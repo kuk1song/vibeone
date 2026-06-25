@@ -59,19 +59,42 @@ final class AppState: ObservableObject {
     /// happy reaction so a switch feels alive (set on press, ignored after the beat).
     @Published var reactionStart: Double?
 
-    /// Folders VibeOne must never touch (ADR-012). Shown read-only in Settings; the
-    /// editor lands later. The default preset guards the work tree.
-    let protectedPaths = ["~/ot"]
+    /// Folders VibeOne must never touch (ADR-012): hidden from the picker AND
+    /// hard-rejected at switch time (defense-in-depth). User-editable in Settings —
+    /// add via a folder picker, remove with an inline confirm. Persisted across
+    /// launches; the first launch seeds the work tree (`~/ot`) as a starting guard
+    /// the user can keep, extend, or remove. Editing only ever changes this LIST —
+    /// VibeOne never reads, writes, moves, or deletes anything inside the folders.
+    @Published var protectedPaths: [String] {
+        didSet {
+            // The render-harness instance (autoload: false) is inert: mutating its
+            // seeded list must not persist to this machine's prefs or rebuild/refresh.
+            guard autoload else { return }
+            UserDefaults.standard.set(protectedPaths, forKey: Self.protectedPathsKey)
+            rebuildGuard()
+        }
+    }
 
     private let home: URL
-    private let pathGuard: PathGuard
+    private let autoload: Bool
+    /// Rebuilt whenever `protectedPaths` changes, so edits take effect immediately.
+    private var pathGuard: PathGuard
     private static let codexDesktopKey = "codexOpensDesktop"
+    private static let protectedPathsKey = "protectedPaths"
+    /// First-launch seed: guard the work tree until the user decides otherwise.
+    private static let defaultProtectedPaths = ["~/ot"]
 
-    /// `autoload: false` builds an inert instance (no disk / shell probes) for the
-    /// render harness, which seeds the published state directly.
+    /// `autoload: false` builds an inert instance (no disk / shell / persistence
+    /// side effects) for the render harness, which seeds the published state directly.
     init(home: URL = FileManager.default.homeDirectoryForCurrentUser, autoload: Bool = true) {
         self.home = home
-        self.pathGuard = PathGuard(deniedPaths: protectedPaths, home: home)
+        self.autoload = autoload
+        // Absent key = first launch → seed the preset. An explicitly emptied list is
+        // stored as [] and respected (the user may remove every entry, ~/ot included).
+        let stored = UserDefaults.standard.array(forKey: Self.protectedPathsKey) as? [String]
+        let paths = stored ?? Self.defaultProtectedPaths
+        self.protectedPaths = paths
+        self.pathGuard = PathGuard(deniedPaths: paths, home: home)
         self.codexOpensDesktop =
             UserDefaults.standard.object(forKey: Self.codexDesktopKey) as? Bool ?? true
         guard autoload else { return }
@@ -119,6 +142,7 @@ final class AppState: ObservableObject {
     /// Re-enumerate sessions and read the current album's config drift. Disk reads
     /// run off the main thread; results publish on the main actor.
     func refresh() {
+        guard autoload else { return }  // inert render-harness instance: keep seeded state
         let home = home
         let exclusions = pathGuard
         Task.detached(priority: .userInitiated) {
@@ -148,6 +172,71 @@ final class AppState: ObservableObject {
             let status = ConfigStatus.read(workspace: workspace, home: home)
             await MainActor.run { self.configStatus = status }
         }
+    }
+
+    // MARK: - Protected folders (deny-list editor, ADR-012)
+
+    /// Add a folder to the never-touch list via the system folder picker. Records
+    /// only the chosen PATH — VibeOne never opens, reads, or modifies the folder; it
+    /// just learns to avoid it. A duplicate is ignored.
+    func addProtectedFolder() {
+        // Deterministic open→pick→reopen sequence. We CLOSE the popover ourselves
+        // first (the normal toggle path, which reliably syncs the status item to
+        // `.off`) rather than letting the modal hide it behind our back — that desync
+        // is what made a `.state`-gated reopen a coin flip (observed live: reopen saw
+        // `.on` and skipped on ~half the adds). With a known-closed baseline, the
+        // post-pick reopen lands every time.
+        MenuBarPopover.dismiss()
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))  // let the close settle
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            panel.prompt = "Protect"
+            panel.message = "Choose a folder VibeOne must never read or write."
+            // A STANDALONE app-modal panel (not a sheet on the popover): a sheet on an
+            // auto-hiding popover gets orphaned — and wedges the app — when the popover
+            // hides. App-modal is robust: clicking outside it only beeps, never orphans.
+            let response = panel.runModal()
+            self.adoptPickedFolder(response, url: panel.url)
+            try? await Task.sleep(for: .milliseconds(120))
+            MenuBarPopover.reopen()
+        }
+    }
+
+    /// Record a folder the user chose in the picker. Only the PATH is stored — the
+    /// folder itself is never opened, read, or modified. A duplicate is ignored.
+    private func adoptPickedFolder(_ response: NSApplication.ModalResponse, url: URL?) {
+        guard response == .OK, let url else { return }
+        let entry = displayPath(for: url)
+        guard !protectedPaths.contains(entry) else { return }
+        protectedPaths.append(entry)
+    }
+
+    /// Remove an entry from the never-touch list. This only changes which paths
+    /// VibeOne avoids — it never touches the folder's contents. The caller confirms
+    /// first, since removing one widens what a future switch may write to.
+    func removeProtectedFolder(_ entry: String) {
+        protectedPaths.removeAll { $0 == entry }
+    }
+
+    /// Rebuild the in-memory guard from the current list and re-enumerate, so an
+    /// added folder disappears from the picker at once (and a removed one returns).
+    /// Touches only the guard and the session list — never the folders' contents.
+    private func rebuildGuard() {
+        pathGuard = PathGuard(deniedPaths: protectedPaths, home: home)
+        refresh()
+    }
+
+    /// Collapse the home prefix to `~` so entries stay tidy and match the `~/ot`
+    /// preset; `PathGuard` canonicalizes both forms identically, so this is display
+    /// only and never changes what gets guarded.
+    private func displayPath(for url: URL) -> String {
+        let path = url.standardizedFileURL.path
+        if path == home.path { return "~" }
+        let prefix = home.path + "/"
+        return path.hasPrefix(prefix) ? "~/" + path.dropFirst(prefix.count) : path
     }
 
     // MARK: - Cueing (selection only — never a switch, per ADR-008)
