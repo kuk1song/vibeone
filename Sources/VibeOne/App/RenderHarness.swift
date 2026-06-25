@@ -47,6 +47,9 @@ enum RenderHarness {
         state.projects = sampleProjects()
         state.selection = destination
         state.codexOpensDesktop = codexDesktop
+        // Sample deny-list so the Settings render shows the editable list with rows
+        // (the inert harness instance neither persists nor refreshes from this).
+        state.protectedPaths = ["~/ot", "~/clients/acme"]
         // Sample drift (memory + MCP aligned, skills not) so the segmented bar shows
         // its lit/unlit contrast — preview data, like the sample projects above, not
         // this machine's real status.

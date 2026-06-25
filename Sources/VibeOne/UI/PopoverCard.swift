@@ -355,11 +355,16 @@ enum RelativeTime {
 
 /// The settings surface — a pull-up panel in the popover, opened from the ⋯ "more"
 /// key (the same slide-in language as the Queue). Holds the canonical "Open Codex
-/// in" toggle (mirrored by the inline player key), the read-only safety deny-list
-/// (the editor lands later), and the app's Quit — which a menu-bar-only app needs a
-/// home for.
+/// in" toggle (mirrored by the inline player key), the editable safety deny-list
+/// (add a folder / remove with an inline confirm), and the app's Quit — which a
+/// menu-bar-only app needs a home for.
 struct SettingsPanel: View {
     @ObservedObject var state: AppState
+
+    /// The row currently awaiting delete confirmation (inline two-step), if any.
+    @State private var pendingRemoval: String?
+
+    private var accent: Color { DS.Colors.accent(for: state.selection) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Spacing.lg) {
@@ -428,20 +433,82 @@ struct SettingsPanel: View {
     private var protectedList: some View {
         VStack(alignment: .leading, spacing: DS.Spacing.sm) {
             ForEach(state.protectedPaths, id: \.self) { path in
-                HStack(spacing: DS.Spacing.sm) {
-                    Image(systemName: "lock.fill").foregroundStyle(DS.Colors.textSecondary)
-                    Text(path)
-                        .font(DS.Typography.body).foregroundStyle(DS.Colors.textPrimary)
-                    Spacer()
-                }
+                protectedRow(path)
             }
-            Text("VibeOne never reads or writes these. Editing comes later.")
+            if state.protectedPaths.isEmpty {
+                Text("None protected — VibeOne may switch in any project.")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Colors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            addButton
+            Text(
+                "VibeOne never reads or writes these — the list only "
+                    + "tells it which folders to leave alone."
+            )
+            .font(DS.Typography.caption)
+            .foregroundStyle(DS.Colors.textSecondary)
+            // Wrap to multiple lines: the live MenuBarExtra window otherwise
+            // proposes the text's single-line width and truncates it.
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// One deny-list entry: a lock + the path, with a remove (×) control that
+    /// expands into an inline "Keep / Remove" confirm. A modal alert would dismiss
+    /// the MenuBarExtra popover, so the confirm stays inline — it still prevents a
+    /// mis-tapped deletion. Removing edits ONLY the list, never the folder.
+    @ViewBuilder
+    private func protectedRow(_ path: String) -> some View {
+        HStack(spacing: DS.Spacing.sm) {
+            Image(systemName: "lock.fill").foregroundStyle(DS.Colors.textSecondary)
+            Text(path)
+                .font(DS.Typography.body).foregroundStyle(DS.Colors.textPrimary)
+                .lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: DS.Spacing.sm)
+            if pendingRemoval == path {
+                Button("Keep") {
+                    withAnimation(DS.switchAnimation) { pendingRemoval = nil }
+                }
+                .buttonStyle(.plain)
                 .font(DS.Typography.caption)
                 .foregroundStyle(DS.Colors.textSecondary)
-                // Wrap to multiple lines: the live MenuBarExtra window otherwise
-                // proposes the text's single-line width and truncates it.
-                .fixedSize(horizontal: false, vertical: true)
+                Button("Remove") {
+                    state.removeProtectedFolder(path)
+                    pendingRemoval = nil
+                }
+                .buttonStyle(.plain)
+                .font(DS.Typography.caption)
+                .foregroundStyle(DS.Colors.textPrimary)
+            } else {
+                Button {
+                    withAnimation(DS.switchAnimation) { pendingRemoval = path }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(DS.Typography.caption)
+                        .foregroundStyle(DS.Colors.textSecondary)
+                        .frame(width: DS.Size.transportButton, height: DS.Size.transportButton)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
         }
+    }
+
+    /// Add a folder to protect — opens the system folder picker (`AppState`).
+    private var addButton: some View {
+        Button {
+            state.addProtectedFolder()
+        } label: {
+            HStack(spacing: DS.Spacing.xs) {
+                Image(systemName: "plus")
+                Text("Add folder…")
+            }
+            .font(DS.Typography.caption)
+            .foregroundStyle(accent)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// Marketing version from the bundle's Info.plist; "dev" under `swift run`
