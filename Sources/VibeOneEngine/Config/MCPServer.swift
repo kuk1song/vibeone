@@ -32,4 +32,15 @@ public struct MCPServer: Equatable, Sendable {
         self.name = name
         self.transport = transport
     }
+
+    /// True when this server is another agent's private plumbing rather than
+    /// user configuration — Codex Desktop registers its bundled browser-control
+    /// helper (`node_repl`) in its own config.toml, with the binary living
+    /// inside Codex.app. Sharing that with the other agent is meaningless (the
+    /// command and env are app internals) and only triggers approval prompts,
+    /// so sync skips these in both directions and status doesn't count them.
+    public var isAgentInternal: Bool {
+        guard case .stdio(let command, _, _) = transport else { return false }
+        return command.contains("/Codex.app/")
+    }
 }
