@@ -9,7 +9,9 @@ import Foundation
 /// missing from the other; servers already present (by name) are never
 /// overwritten, and unrelated config is preserved (ARCHITECTURE §5). v0 scope is
 /// project-scope Claude (`.mcp.json`); user-scope `~/.claude.json` servers are
-/// surfaced in status for visibility only.
+/// surfaced in status for visibility only. Servers that are an agent's own
+/// internal plumbing (`MCPServer.isAgentInternal`) are excluded from both
+/// directions and from status.
 public enum MCPSync {
 
     // MARK: - Status (read-only)
@@ -115,11 +117,13 @@ public enum MCPSync {
     static func readClaude(workspace: String) -> [MCPServer] {
         let url = ConfigLocation.claudeProjectMCP(workspace: workspace)
         return ClaudeMCP.read(json: (try? String(contentsOf: url, encoding: .utf8)) ?? "")
+            .filter { !$0.isAgentInternal }
     }
 
     static func readCodex(home: URL) -> [MCPServer] {
         let url = ConfigLocation.codexConfig(home: home)
         return CodexMCP.read(toml: (try? String(contentsOf: url, encoding: .utf8)) ?? "")
+            .filter { !$0.isAgentInternal }
     }
 
     /// User/local-scope servers from `~/.claude.json` (top-level `mcpServers` +

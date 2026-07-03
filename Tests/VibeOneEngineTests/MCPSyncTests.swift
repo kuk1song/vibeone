@@ -90,4 +90,56 @@ final class MCPSyncTests: XCTestCase {
         // .mcp.json was created.
         XCTAssertEqual(MCPSync.readClaude(workspace: ws.path).map(\.name), ["fs"])
     }
+
+    // MARK: - Agent-internal servers (never synced, never counted)
+
+    /// Codex Desktop registers its own bundled helper (`node_repl`, shipped
+    /// inside Codex.app) in config.toml. That's the app's private plumbing, not
+    /// user configuration — it must not leak to the other agent or count as drift.
+    func testStatusIgnoresCodexInternalServers() throws {
+        try writeCodexConfig(
+            """
+            [mcp_servers.node_repl]
+            command = "/Applications/Codex.app/Contents/Resources/cua_node/bin/node_repl"
+
+            [mcp_servers.real]
+            command = "real-server"
+            """)
+        let status = MCPSync.status(workspace: ws.path, home: home)
+        XCTAssertEqual(status.codexServers, ["real"])
+        XCTAssertEqual(status.missingInClaude, ["real"])
+    }
+
+    func testApplyDoesNotCopyCodexInternalServerToClaude() throws {
+        try writeCodexConfig(
+            """
+            [mcp_servers.node_repl]
+            command = "/Applications/Codex.app/Contents/Resources/cua_node/bin/node_repl"
+
+            [mcp_servers.real]
+            command = "real-server"
+            """)
+        let outcome = try MCPSync.apply(workspace: ws.path, home: home, timestamp: { "TS" })
+        XCTAssertEqual(outcome.addedToClaude, ["real"])
+        let json = try String(
+            contentsOf: ws.appendingPathComponent(".mcp.json"), encoding: .utf8)
+        XCTAssertTrue(json.contains("real"))
+        XCTAssertFalse(json.contains("node_repl"), "internal server must not leak to Claude")
+    }
+
+    /// An internal server that already leaked into a project's .mcp.json (synced
+    /// by an earlier build) must not bounce back into Codex or count as drift.
+    func testApplyIgnoresLeakedInternalServerInClaudeConfig() throws {
+        try writeClaudeMCP(
+            """
+            {"mcpServers":{"node_repl":{"command":"/Applications/Codex.app/Contents/Resources/cua_node/bin/node_repl"}}}
+            """)
+        let outcome = try MCPSync.apply(workspace: ws.path, home: home, timestamp: { "TS" })
+        XCTAssertEqual(outcome.addedToCodex, [])
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: home.appendingPathComponent(".codex/config.toml").path),
+            "nothing to sync — Codex config must not even be created")
+        XCTAssertTrue(MCPSync.status(workspace: ws.path, home: home).inSync)
+    }
 }
