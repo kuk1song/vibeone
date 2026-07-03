@@ -47,12 +47,19 @@ public enum AtomicFile {
     /// overwritten. Returns the backup URL, or `nil` if `url` doesn't exist (a
     /// brand-new target needs no backup). `timestamp` should be filesystem-safe
     /// (the caller owns its format).
+    ///
+    /// An existing backup is never deleted — it holds a pre-write state that would
+    /// otherwise be unrecoverable. If two writes land inside one timestamp tick,
+    /// the second backup gets a unique suffix instead of replacing the first.
     @discardableResult
     public static func backup(_ url: URL, timestamp: String) throws -> URL? {
         let fm = FileManager.default
         guard fm.fileExists(atPath: url.path) else { return nil }
-        let backup = url.appendingPathExtension("bak.\(timestamp)")
-        if fm.fileExists(atPath: backup.path) { try fm.removeItem(at: backup) }
+        var backup = url.appendingPathExtension("bak.\(timestamp)")
+        if fm.fileExists(atPath: backup.path) {
+            let unique = ProcessInfo.processInfo.globallyUniqueString.prefix(8)
+            backup = url.appendingPathExtension("bak.\(timestamp)-\(unique)")
+        }
         try fm.copyItem(at: url, to: backup)
         return backup
     }
