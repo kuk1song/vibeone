@@ -312,14 +312,19 @@ final class AppState: ObservableObject {
                 // skills are opt-in via the manual ‹Sync›. Runs before opening so
                 // the target lands already aligned.
                 let report = ConfigSync.run(scope: .projectLevel, workspace: workspace, home: home)
+                if destination == .codex && codexMode == .desktop {
+                    // The Desktop open can take seconds when Codex has to cold-start
+                    // (launch + settle before any deep link); narrate the wait.
+                    await MainActor.run { self.feedback = "Opening in Codex…" }
+                }
+                let launch = await AgentLauncher.open(
+                    agent: destination,
+                    sessionId: result.sessionId,
+                    resumeCommand: result.resumeCommand,
+                    workspace: workspace,
+                    codexMode: codexMode)
                 await MainActor.run {
                     self.logSyncReport(report)
-                    let launch = AgentLauncher.open(
-                        agent: destination,
-                        sessionId: result.sessionId,
-                        resumeCommand: result.resumeCommand,
-                        workspace: workspace,
-                        codexMode: codexMode)
                     Log.switching.info("\(launch.message, privacy: .public)")
                     self.isLaunching = false
                     self.feedback = Self.switchLine(launch: launch, sync: report)

@@ -47,6 +47,21 @@ final class AtomicFileTests: XCTestCase {
             FileManager.default.fileExists(atPath: url.path), "backup must not move the original")
     }
 
+    /// Two writes inside one timestamp tick must yield two backups: the earlier
+    /// pre-write state is never replaced by the later one.
+    func testBackupNeverOverwritesAnEarlierBackupWithTheSameTimestamp() throws {
+        let url = root.appendingPathComponent("config.toml")
+        try AtomicFile.write("v1", to: url)
+
+        let first = try XCTUnwrap(try AtomicFile.backup(url, timestamp: "same-tick"))
+        try AtomicFile.write("v2", to: url)
+        let second = try XCTUnwrap(try AtomicFile.backup(url, timestamp: "same-tick"))
+
+        XCTAssertNotEqual(first, second, "a colliding backup must pick a distinct name")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "v1")
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "v2")
+    }
+
     func testBackupReturnsNilWhenSourceMissing() throws {
         let url = root.appendingPathComponent("does-not-exist.toml")
         XCTAssertNil(try AtomicFile.backup(url, timestamp: "20260606T000000"))
