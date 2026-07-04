@@ -13,7 +13,9 @@ public struct ClaudeSessionStore: SessionStore {
     }
 
     public func read(_ url: URL) throws -> CanonicalSession {
-        let ir = ClaudeSession.read(jsonl: try String(contentsOf: url, encoding: .utf8))
+        // Streamed, not loaded whole: a long transcript can reach hundreds of
+        // MB, and the parsed IR is far smaller than the raw JSONL.
+        let ir = ClaudeSession.read(lines: try FileLines(url: url))
         return try ir.validated(agent: agent, source: url)
     }
 
