@@ -100,7 +100,7 @@ enum RenderHarness {
     /// status bar renders with visible lit/unlit segments. Preview data only.
     static func sampleStatus() -> ConfigStatus {
         ConfigStatus(
-            memory: .init(agentsExists: true, claudeImportsAgents: true),
+            memory: .init(agentsExists: true, claudeImportsAgents: true, claudeHasContent: true),
             mcp: .init(
                 claudeServers: ["filesystem"], codexServers: ["filesystem"],
                 missingInCodex: [], missingInClaude: [], userScopeServers: []),

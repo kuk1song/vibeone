@@ -14,7 +14,9 @@ public struct CodexSessionStore: SessionStore {
     }
 
     public func read(_ url: URL) throws -> CanonicalSession {
-        let ir = CodexSession.read(jsonl: try String(contentsOf: url, encoding: .utf8))
+        // Streamed, not loaded whole: a long rollout can reach hundreds of MB,
+        // and the parsed IR is far smaller than the raw JSONL.
+        let ir = CodexSession.read(lines: try FileLines(url: url))
         return try ir.validated(agent: agent, source: url)
     }
 
@@ -88,7 +90,7 @@ public struct CodexSessionStore: SessionStore {
     /// identifies a VibeOne-written rollout, PARSERS §3).
     private func meta(of url: URL) -> (id: String, cwd: String, originator: String?)? {
         guard
-            let firstLine = FileHead.lines(of: url).first,
+            let firstLine = FileHead.firstLine(of: url),
             let obj = try? JSONSerialization.jsonObject(with: Data(firstLine.utf8))
                 as? [String: Any],
             (obj["type"] as? String) == "session_meta",

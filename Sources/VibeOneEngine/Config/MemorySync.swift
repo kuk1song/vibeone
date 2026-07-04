@@ -23,13 +23,21 @@ public enum MemorySync {
         public var agentsExists: Bool
         /// `CLAUDE.md` exists and contains the `@AGENTS.md` import line.
         public var claudeImportsAgents: Bool
+        /// `CLAUDE.md` carries real content of its own (anything beyond a bare
+        /// import line) — the material `apply` would adopt into `AGENTS.md`.
+        public var claudeHasContent: Bool
 
-        /// Both agents resolve to the same brain.
-        public var inSync: Bool { agentsExists && claudeImportsAgents }
+        /// Both agents resolve to the same brain. Mirrors `apply` exactly:
+        /// true iff `apply` would be a no-op (`.alreadySynced` / `.noMemory`).
+        /// A project with no memory at all is vacuously in sync — both agents
+        /// resolve to the same, empty, brain — not drifted; anything else would
+        /// show drift the Sync action cannot clear.
+        public var inSync: Bool { agentsExists ? claudeImportsAgents : !claudeHasContent }
 
-        public init(agentsExists: Bool, claudeImportsAgents: Bool) {
+        public init(agentsExists: Bool, claudeImportsAgents: Bool, claudeHasContent: Bool) {
             self.agentsExists = agentsExists
             self.claudeImportsAgents = claudeImportsAgents
+            self.claudeHasContent = claudeHasContent
         }
     }
 
@@ -43,7 +51,8 @@ public enum MemorySync {
         let claudeText = (try? String(contentsOf: claude, encoding: .utf8)) ?? ""
         return Status(
             agentsExists: fm.fileExists(atPath: agents.path),
-            claudeImportsAgents: importsAgents(claudeText))
+            claudeImportsAgents: importsAgents(claudeText),
+            claudeHasContent: !adoptSeed(from: claudeText).isEmpty)
     }
 
     // MARK: - Apply (write)

@@ -22,10 +22,34 @@ final class MemorySyncTests: XCTestCase {
 
     // MARK: - Status
 
-    func testStatusNotInSyncWhenNoMemoryFiles() {
+    func testStatusVacuouslyInSyncWhenNoMemoryFiles() {
+        // No AGENTS.md, no CLAUDE.md: both agents resolve to the same (empty)
+        // brain and `apply` is a `.noMemory` no-op — showing drift here offered
+        // a Sync that could not change anything.
         let s = MemorySync.status(workspace: ws.path)
         XCTAssertFalse(s.agentsExists)
         XCTAssertFalse(s.claudeImportsAgents)
+        XCTAssertFalse(s.claudeHasContent)
+        XCTAssertTrue(s.inSync)
+    }
+
+    func testStatusVacuouslyInSyncWhenClaudeIsOnlyADanglingImport() throws {
+        // A bare `@AGENTS.md` import with no AGENTS.md resolves to the same
+        // empty brain for both agents, and `apply` is `.noMemory` (nothing
+        // adoptable) — consistent with the apply test below.
+        try write("CLAUDE.md", "@AGENTS.md\n")
+        let s = MemorySync.status(workspace: ws.path)
+        XCTAssertFalse(s.claudeHasContent)
+        XCTAssertTrue(s.inSync)
+    }
+
+    func testStatusDriftWhenClaudeHasContentButNoAgents() throws {
+        // Real CLAUDE.md content with no AGENTS.md is genuine drift: Codex sees
+        // nothing of it, and `apply` would adopt (write files) to fix that.
+        try write("CLAUDE.md", "# project rules\n")
+        let s = MemorySync.status(workspace: ws.path)
+        XCTAssertFalse(s.agentsExists)
+        XCTAssertTrue(s.claudeHasContent)
         XCTAssertFalse(s.inSync)
     }
 
