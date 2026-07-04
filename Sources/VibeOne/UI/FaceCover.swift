@@ -33,7 +33,7 @@ struct FaceCover: View {
             } else if reduceMotion {
                 canvas(t: 0)  // resting face — no blink, no reaction
             } else {
-                TimelineView(.animation) { timeline in
+                TimelineView(.animation(minimumInterval: FaceGrid.tickInterval)) { timeline in
                     canvas(t: timeline.date.timeIntervalSinceReferenceDate)
                 }
             }
@@ -45,7 +45,9 @@ struct FaceCover: View {
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
         .shadow(
             color: accent.opacity(FaceGrid.glowOpacity), radius: FaceGrid.glowRadius,
-            y: FaceGrid.glowY)
+            y: FaceGrid.glowY
+        )
+        .accessibilityHidden(true)  // decorative mascot
     }
 
     private func canvas(t: Double) -> some View {
@@ -145,6 +147,9 @@ private enum FaceGrid {
     static let cols = 24
     static let rows = 15
     static let dotRatio: CGFloat = 0.62  // dot diameter / cell
+    // LED dots are discrete — 30 Hz reads the same as display-rate redraws
+    // (blink and reaction ramps still get 5+ frames) at a quarter of the cost.
+    static let tickInterval: Double = 1.0 / 30
     // Size of the lit FACE relative to the (panel-filling) grid pitch. 1.0 = the
     // expression sits one-dot-per-cell on the grid; >1 enlarges the face, scaling
     // out from the panel centre while the unlit grid still fills the whole panel.
