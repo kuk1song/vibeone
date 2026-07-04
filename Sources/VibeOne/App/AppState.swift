@@ -149,7 +149,10 @@ final class AppState: ObservableObject {
             let projects = SessionHandoff.projectSessions(home: home, excluding: exclusions)
             await MainActor.run {
                 self.projects = projects
-                self.albumIndex = min(self.albumIndex, max(0, projects.count - 1))
+                // Land on the most recently active project — the one the user is
+                // working in right now. A kept index would point at an effectively
+                // random album, because the newest-first order shifts between opens.
+                self.albumIndex = 0
                 self.pinnedSource = nil
                 // Re-opening the popover is a fresh start: drop any leftover "Opened
                 // in …" line from the switch that just auto-closed it.
