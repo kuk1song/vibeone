@@ -79,6 +79,13 @@ final class AppState: ObservableObject {
     private let autoload: Bool
     /// Rebuilt whenever `protectedPaths` changes, so edits take effect immediately.
     private var pathGuard: PathGuard
+    /// Monotonic stamps so detached work can tell it has been superseded.
+    /// `scanGeneration` guards session enumeration (a slow old scan must not
+    /// publish over a newer one) and the post-switch auto-close (a reopened
+    /// popover refreshes, and a switch from before that must not steal it);
+    /// `configGeneration` orders per-album config reads across album changes.
+    private var scanGeneration = 0
+    private var configGeneration = 0
     private static let codexDesktopKey = "codexOpensDesktop"
     private static let protectedPathsKey = "protectedPaths"
     /// First-launch seed: guard the work tree until the user decides otherwise.
@@ -143,11 +150,14 @@ final class AppState: ObservableObject {
     /// run off the main thread; results publish on the main actor.
     func refresh() {
         guard autoload else { return }  // inert render-harness instance: keep seeded state
+        scanGeneration += 1
+        let gen = scanGeneration
         let home = home
         let exclusions = pathGuard
         Task.detached(priority: .userInitiated) {
             let projects = SessionHandoff.projectSessions(home: home, excluding: exclusions)
             await MainActor.run {
+                guard self.scanGeneration == gen else { return }  // superseded by a newer scan
                 self.projects = projects
                 // Land on the most recently active project — the one the user is
                 // working in right now. A kept index would point at an effectively
@@ -170,10 +180,15 @@ final class AppState: ObservableObject {
             configStatus = nil
             return
         }
+        configGeneration += 1
+        let gen = configGeneration
         let home = home
         Task.detached(priority: .userInitiated) {
             let status = ConfigStatus.read(workspace: workspace, home: home)
-            await MainActor.run { self.configStatus = status }
+            await MainActor.run {
+                guard self.configGeneration == gen else { return }  // album changed again
+                self.configStatus = status
+            }
         }
     }
 
@@ -295,6 +310,7 @@ final class AppState: ObservableObject {
         isLaunching = true
         feedback = nil
         reactionStart = Date.timeIntervalSinceReferenceDate  // kick the face's happy reaction
+        let gen = scanGeneration
 
         let home = home
         Log.switching.info(
@@ -327,6 +343,11 @@ final class AppState: ObservableObject {
                     workspace: workspace,
                     codexMode: codexMode)
                 await MainActor.run {
+                    // Refreshed past this switch = the popover was closed and
+                    // reopened mid-flight. The outcome line is still worth
+                    // showing, but the auto-close below must not fire — it
+                    // would steal the popover the user just reopened.
+                    let superseded = self.scanGeneration != gen
                     self.logSyncReport(report)
                     Log.switching.info("\(launch.message, privacy: .public)")
                     self.isLaunching = false
@@ -338,7 +359,7 @@ final class AppState: ObservableObject {
                     // beat is never cut off mid-squint. If nothing opened, keep it up
                     // — the fallback command must stay visible (and a failure, handled
                     // below, also keeps it up).
-                    if launch.opened {
+                    if launch.opened && !superseded {
                         let reactionStart = self.reactionStart
                         // No reaction plays under Reduce Motion, so don't wait for one.
                         let reduceMotion =
