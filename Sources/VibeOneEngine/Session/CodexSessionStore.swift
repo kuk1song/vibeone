@@ -90,7 +90,7 @@ public struct CodexSessionStore: SessionStore {
     /// identifies a VibeOne-written rollout, PARSERS §3).
     private func meta(of url: URL) -> (id: String, cwd: String, originator: String?)? {
         guard
-            let firstLine = FileHead.lines(of: url).first,
+            let firstLine = FileHead.firstLine(of: url),
             let obj = try? JSONSerialization.jsonObject(with: Data(firstLine.utf8))
                 as? [String: Any],
             (obj["type"] as? String) == "session_meta",
