@@ -140,8 +140,8 @@ struct PopoverCard: View {
 
     /// Spread full-width like a player's now-playing transport (Spotify / Apple
     /// Music): five controls distributed edge-to-edge with equal gaps, so ▶ lands
-    /// dead-centre as the visual anchor and the modal keys (open-mode · queue) sit at
-    /// the symmetric left/right rims — a balanced row, not a left cluster.
+    /// dead-centre as the visual anchor and the modal keys (open-mode · settings) sit
+    /// at the symmetric left/right rims — a balanced row, not a left cluster.
     private var transport: some View {
         HStack(spacing: 0) {
             modeKey
@@ -154,15 +154,15 @@ struct PopoverCard: View {
             Spacer(minLength: DS.Spacing.sm)
             TransportButton(symbol: "forward.end.fill") { flip() }
             Spacer(minLength: DS.Spacing.sm)
-            TransportButton(symbol: "music.note.list") {
-                withAnimation(DS.switchAnimation) { state.queueOpen = true }
+            TransportButton(symbol: "ellipsis") {
+                withAnimation(DS.switchAnimation) { state.settingsOpen = true }
             }
         }
     }
 
     /// The utility row beneath the transport (Spotify's bottom row): the transient
-    /// switch confirmation sits at the left rim (under the open-mode key), ⋯
-    /// (SETTINGS) at the right rim — directly under ☰ (QUEUE), both 32pt frames.
+    /// switch confirmation sits at the left rim (under the open-mode key), ☰
+    /// (QUEUE) at the right rim — directly under ⋯ (SETTINGS), both 32pt frames.
     private var secondary: some View {
         HStack(spacing: 0) {
             Text(state.feedback ?? " ")
@@ -171,8 +171,8 @@ struct PopoverCard: View {
                 .opacity(state.feedback == nil ? 0 : 1)
                 .lineLimit(1)
             Spacer(minLength: DS.Spacing.sm)
-            TransportButton(symbol: "ellipsis") {
-                withAnimation(DS.switchAnimation) { state.settingsOpen = true }
+            TransportButton(symbol: "music.note.list") {
+                withAnimation(DS.switchAnimation) { state.queueOpen = true }
             }
         }
     }
