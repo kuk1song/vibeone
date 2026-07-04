@@ -134,9 +134,15 @@ public struct ClaudeSessionStore: SessionStore {
     }
 
     /// A transcript's project root (its first recorded `cwd`) and whether VibeOne
-    /// wrote it (any line carries the `Provenance` mark). Claude stamps both on its
+    /// wrote it (a line carries the `Provenance` mark). Claude stamps both on its
     /// lines, and they land in the first few, so a bounded head read avoids loading
     /// a large transcript.
+    ///
+    /// The scan stops at the first `cwd`-bearing line: VibeOne stamps the mark on
+    /// EVERY line it writes (and writes files whole, from line 1), so the mark can
+    /// never first appear after the first `cwd` — by then both fields are decided.
+    /// Without this stop, every genuine (unmarked) transcript paid a full parse of
+    /// the head window per popover open just to conclude `generated == false`.
     private func header(of url: URL) -> (cwd: String?, generated: Bool) {
         var cwd: String?
         var generated = false
@@ -146,7 +152,7 @@ public struct ClaudeSessionStore: SessionStore {
             else { continue }
             if cwd == nil, let value = obj["cwd"] as? String, !value.isEmpty { cwd = value }
             if (obj[Provenance.claudeKey] as? String) == Provenance.vibeOne { generated = true }
-            if cwd != nil && generated { break }
+            if cwd != nil { break }
         }
         return (cwd, generated)
     }
