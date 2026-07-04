@@ -17,8 +17,8 @@ import VibeOneEngine
 ///   • ⏮ / ⏭   — flip the destination within this project (Claude ⇄ Codex)
 ///   • ▶ play   — SWITCH: hand the conversation off to the destination, sync the
 ///                project-level config, and open it (explicit-select, ADR-008).
-///   • ☰        — pull up the QUEUE: pick any session across projects
 ///   • ⋯        — pull up SETTINGS: Codex open mode, protected folders, Quit
+///   • ☰        — pull up the QUEUE: pick any session across projects
 ///
 /// Built entirely from `DesignSystem.swift` tokens — no raw numbers / hex / font
 /// sizes here. All data and actions live on `AppState`; this is the view only.
@@ -62,6 +62,8 @@ struct PopoverCard: View {
                 Text(state.projectName)
                     .font(DS.Typography.caption)
                     .foregroundStyle(DS.Colors.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
             progress
@@ -146,15 +148,15 @@ struct PopoverCard: View {
         HStack(spacing: 0) {
             modeKey
             Spacer(minLength: DS.Spacing.sm)
-            TransportButton(symbol: "backward.end.fill") { flip() }
+            TransportButton(symbol: "backward.end.fill", label: "Flip destination") { flip() }
             Spacer(minLength: DS.Spacing.sm)
             PlayButton(agent: destination) { state.activate() }
                 .disabled(!state.canSwitch)
                 .opacity(state.canSwitch ? 1 : DS.Opacity.disabled)
             Spacer(minLength: DS.Spacing.sm)
-            TransportButton(symbol: "forward.end.fill") { flip() }
+            TransportButton(symbol: "forward.end.fill", label: "Flip destination") { flip() }
             Spacer(minLength: DS.Spacing.sm)
-            TransportButton(symbol: "ellipsis") {
+            TransportButton(symbol: "ellipsis", label: "Settings") {
                 withAnimation(DS.switchAnimation) { state.settingsOpen = true }
             }
         }
@@ -169,9 +171,13 @@ struct PopoverCard: View {
                 .font(DS.Typography.caption)
                 .foregroundStyle(accent)
                 .opacity(state.feedback == nil ? 0 : 1)
-                .lineLimit(1)
+                // A failed open falls back to showing the resume COMMAND — it
+                // must wrap fully and stay copyable, not truncate at one line.
+                .lineLimit(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
             Spacer(minLength: DS.Spacing.sm)
-            TransportButton(symbol: "music.note.list") {
+            TransportButton(symbol: "music.note.list", label: "Queue") {
                 withAnimation(DS.switchAnimation) { state.queueOpen = true }
             }
         }
@@ -187,10 +193,12 @@ struct PopoverCard: View {
         let isCodex = destination == .codex
         TransportButton(
             symbol: state.codexOpensDesktop ? "macwindow" : "terminal",
+            label: "Codex open mode",
             tint: isCodex ? accent : DS.Colors.textSecondary
         ) {
             withAnimation(DS.switchAnimation) { state.toggleCodexMode() }
         }
+        .accessibilityValue(state.codexOpensDesktop ? "Desktop app" : "Terminal")
         .disabled(!isCodex)
         .opacity(isCodex ? 1 : DS.Opacity.disabled)
     }
@@ -212,6 +220,14 @@ struct PopoverCard: View {
                 .font(DS.Typography.caption)
                 .foregroundStyle(DS.Colors.textSecondary)
                 .multilineTextAlignment(.center)
+            // Settings must stay reachable with zero sessions — it holds Quit,
+            // and a menu-bar-only app has no other exit.
+            HStack(spacing: 0) {
+                Spacer(minLength: DS.Spacing.sm)
+                TransportButton(symbol: "ellipsis", label: "Settings") {
+                    withAnimation(DS.switchAnimation) { state.settingsOpen = true }
+                }
+            }
         }
         .padding(DS.Spacing.xl)
     }
@@ -231,7 +247,7 @@ struct QueueView: View {
         VStack(alignment: .leading, spacing: DS.Spacing.sm) {
             header
             if scrollable {
-                ScrollView { list }
+                ScrollView { lazyList }
                     .frame(maxHeight: DS.Size.queueMaxHeight)
             } else {
                 list
@@ -254,28 +270,49 @@ struct QueueView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Close queue")
         }
         .padding(.horizontal, DS.Spacing.md)
         .padding(.top, DS.Spacing.md)
     }
 
+    /// The live queue is lazy — it lists every session of every project.
+    private var lazyList: some View {
+        LazyVStack(alignment: .leading, spacing: DS.Spacing.md) { rows }
+            .padding(.vertical, DS.Spacing.sm)
+    }
+
+    /// Eager twin for the render harness — ImageRenderer won't lay out lazy content.
     private var list: some View {
-        VStack(alignment: .leading, spacing: DS.Spacing.md) {
-            ForEach(state.projects) { project in
-                VStack(alignment: .leading, spacing: DS.Spacing.xs) {
-                    Text(URL(fileURLWithPath: project.workspace).lastPathComponent)
-                        .font(DS.Typography.caption)
-                        .foregroundStyle(DS.Colors.textSecondary)
-                        .padding(.horizontal, DS.Spacing.md)
-                    ForEach(project.claude + project.codex) { session in
-                        SessionRow(session: session, cued: state.source?.id == session.id) {
-                            withAnimation(DS.switchAnimation) { state.pick(session) }
-                        }
+        VStack(alignment: .leading, spacing: DS.Spacing.md) { rows }
+            .padding(.vertical, DS.Spacing.sm)
+    }
+
+    @ViewBuilder
+    private var rows: some View {
+        ForEach(state.projects) { project in
+            VStack(alignment: .leading, spacing: DS.Spacing.xs) {
+                Text(URL(fileURLWithPath: project.workspace).lastPathComponent)
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Colors.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(project.workspace)  // same-named folders differ by path
+                    .padding(.horizontal, DS.Spacing.md)
+                ForEach(sessions(of: project)) { session in
+                    SessionRow(session: session, cued: state.source?.id == session.id) {
+                        withAnimation(DS.switchAnimation) { state.pick(session) }
                     }
                 }
             }
         }
-        .padding(.vertical, DS.Spacing.sm)
+    }
+
+    /// A project's sessions interleaved by recency — not "all Claude, then all
+    /// Codex", which would shuffle a fresh Codex session below week-old Claude
+    /// ones and contradict the newest-first order of the album list itself.
+    private func sessions(of project: SessionHandoff.ProjectSessions) -> [SessionSummary] {
+        (project.claude + project.codex).sorted { $0.modified > $1.modified }
     }
 }
 
@@ -296,12 +333,24 @@ private struct SessionRow: View {
             HStack(spacing: DS.Spacing.md) {
                 SessionArt(agent: agent)
                 VStack(alignment: .leading, spacing: DS.Spacing.xs) {
-                    Text(agent.title)
-                        .font(DS.Typography.body)
-                        .foregroundStyle(cued ? tint : DS.Colors.textPrimary)
+                    HStack(spacing: DS.Spacing.xs) {
+                        Text(agent.title)
+                            .font(DS.Typography.body)
+                            .foregroundStyle(cued ? tint : DS.Colors.textPrimary)
+                        if session.generatedByVibeOne {
+                            // Mark handoff copies, or identical-looking rows
+                            // ("Claude Code · 5m ago" twice) can't be told apart.
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(DS.Typography.caption)
+                                .foregroundStyle(DS.Colors.textSecondary)
+                                .accessibilityLabel("handoff copy")
+                                .help("Created by a VibeOne handoff")
+                        }
+                    }
                     Text(RelativeTime.string(for: session.modified))
                         .font(DS.Typography.caption)
                         .foregroundStyle(DS.Colors.textSecondary)
+                        .help(session.modified.formatted(date: .abbreviated, time: .shortened))
                 }
                 Spacer()
                 if cued {
@@ -392,6 +441,7 @@ struct SettingsPanel: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Close settings")
         }
     }
 
@@ -491,6 +541,7 @@ struct SettingsPanel: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Remove \(path) from protected folders")
             }
         }
     }

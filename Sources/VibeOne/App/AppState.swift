@@ -380,6 +380,7 @@ final class AppState: ObservableObject {
                     "switch failed: \(error.localizedDescription, privacy: .public)")
                 await MainActor.run {
                     self.isLaunching = false
+                    self.reactionStart = nil  // no happy beat over a failure line
                     self.feedback = Self.switchFailureMessage(error)
                 }
             }

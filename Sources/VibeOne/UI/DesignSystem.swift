@@ -294,14 +294,17 @@ struct PlayButton: View {
         }
         .buttonStyle(.plain)
         // No glow — the play circle reads on its own (tuned to a flat finish).
+        .accessibilityLabel("Switch to \(agent.title)")
     }
 }
 
 /// A flat secondary icon button used either side of `PlayButton` (sync / switch /
 /// more). Tappable across its full square; no fill — the play circle is the only
-/// emphasized control.
+/// emphasized control. `label` is the VoiceOver name: required, because the SF
+/// Symbol defaults mislead here (⏮ is "flip destination", not "skip back").
 struct TransportButton: View {
     var symbol: String
+    var label: String
     var tint: Color = DS.Colors.textSecondary  // accent for a live/stateful control
     var action: () -> Void
 
@@ -314,5 +317,6 @@ struct TransportButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 }
