@@ -8,18 +8,30 @@ public enum ClaudeSession {
 
     /// Parse a Claude `.jsonl` transcript into the canonical IR.
     ///
+    /// Convenience over `read(lines:)` for an in-memory transcript (tests,
+    /// golden masters). Adapters stream from disk instead — a long-running
+    /// transcript can reach hundreds of MB, too big to load whole.
+    public static func read(jsonl: String) -> CanonicalSession {
+        read(
+            lines: jsonl.split(separator: "\n", omittingEmptySubsequences: true)
+                .lazy.map { Data($0.utf8) })
+    }
+
+    /// Parse a stream of raw JSONL records (one `Data` per line) into the
+    /// canonical IR — the memory-bounded core `read(jsonl:)` wraps.
+    ///
     /// Only `user`/`assistant` lines carry conversation (PARSERS §1); every other
     /// line type (`system`, `file-history-snapshot`, …) is ignored. Lines are
     /// taken in file order. `message.content` may be a plain string OR an array of
     /// typed parts — text parts are concatenated; non-text parts (tool_use/result)
     /// are dropped in v0.
-    public static func read(jsonl: String) -> CanonicalSession {
+    public static func read(lines: some Sequence<Data>) -> CanonicalSession {
         var messages: [CanonicalMessage] = []
         var workspace = ""
         var model: String?
 
-        for raw in jsonl.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard let data = raw.data(using: .utf8),
+        for data in lines {
+            guard
                 let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                 let type = obj["type"] as? String,
                 type == "user" || type == "assistant"

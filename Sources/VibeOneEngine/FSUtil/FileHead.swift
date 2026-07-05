@@ -26,4 +26,19 @@ enum FileHead {
         guard let text = String(data: complete, encoding: .utf8) else { return [] }
         return text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
     }
+
+    /// The first non-empty line only — for formats whose whole header is line 1
+    /// (Codex's `session_meta`). Same window and result as `lines(of:).first`,
+    /// but decodes just that line instead of materializing every line in the
+    /// window; per-file cost matters because enumeration calls this once per
+    /// rollout on every popover open.
+    static func firstLine(of url: URL, maxBytes: Int = defaultMaxBytes) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: maxBytes), !data.isEmpty else { return nil }
+        guard let start = data.firstIndex(where: { $0 != 0x0A }) else { return nil }
+        // Like `lines`, a window with no newline is treated as one whole line.
+        let end = data[start...].firstIndex(of: 0x0A) ?? data.endIndex
+        return String(data: data[start..<end], encoding: .utf8)
+    }
 }

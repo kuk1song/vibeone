@@ -21,13 +21,15 @@ final class ConfigStatusTests: XCTestCase {
         try? fm.removeItem(at: ws)
     }
 
-    func testEmptyProjectIsNotFullyInSync() {
+    func testEmptyProjectIsVacuouslyInSync() {
         let status = ConfigStatus.read(workspace: ws.path, home: home)
-        // No AGENTS.md → memory not set up; empty MCP/skills are trivially aligned.
-        XCTAssertFalse(status.memory.inSync)
+        // Nothing to sync on any dimension: no memory files, no MCP servers, no
+        // skills. Every dimension is vacuously aligned — the sync actions would
+        // all be no-ops, so showing drift would offer a Sync that cannot act.
+        XCTAssertTrue(status.memory.inSync)
         XCTAssertTrue(status.mcp.inSync)
         XCTAssertTrue(status.skills.inSync)
-        XCTAssertFalse(status.allInSync)
+        XCTAssertTrue(status.allInSync)
     }
 
     func testFullyConfiguredProjectIsAllInSync() throws {

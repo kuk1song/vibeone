@@ -9,6 +9,18 @@ public enum CodexSession {
 
     /// Parse a Codex rollout `.jsonl` into the canonical IR.
     ///
+    /// Convenience over `read(lines:)` for an in-memory rollout (tests, golden
+    /// masters). Adapters stream from disk instead — rollouts grow unboundedly
+    /// with session length, too big to assume loadable whole.
+    public static func read(jsonl: String) -> CanonicalSession {
+        read(
+            lines: jsonl.split(separator: "\n", omittingEmptySubsequences: true)
+                .lazy.map { Data($0.utf8) })
+    }
+
+    /// Parse a stream of raw JSONL records (one `Data` per line) into the
+    /// canonical IR — the memory-bounded core `read(jsonl:)` wraps.
+    ///
     /// `session_meta` (first line) carries `cwd`; the model name lives in
     /// `turn_context.payload.model` (verified on real data — `session_meta` only
     /// has `model_provider`). Conversation lives in `response_item` lines whose
@@ -16,13 +28,13 @@ public enum CodexSession {
     /// text in `output_text`/`text` parts. `developer`-role messages (base/system
     /// instructions) and `reasoning` / `web_search_call` / `function_call*`
     /// payloads are dropped in v0 (PARSERS §4); `event_msg` UI lines are ignored.
-    public static func read(jsonl: String) -> CanonicalSession {
+    public static func read(lines: some Sequence<Data>) -> CanonicalSession {
         var messages: [CanonicalMessage] = []
         var workspace = ""
         var model: String?
 
-        for raw in jsonl.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard let data = raw.data(using: .utf8),
+        for data in lines {
+            guard
                 let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                 let type = obj["type"] as? String,
                 let payload = obj["payload"] as? [String: Any]
