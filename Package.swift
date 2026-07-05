@@ -31,7 +31,9 @@ let package = Package(
             // Golden-master inputs (scrubbed real sessions). `.copy` keeps the
             // JSONL byte-exact; `.process` would not. Read via `Bundle.module`.
             // Expected snapshots are NOT bundled — they live next to the test
-            // source and are read/recorded symmetrically via `#filePath` (ADR-010).
+            // source and are read/recorded symmetrically via `#filePath` (ADR-010),
+            // so they are `exclude`d rather than declared as resources.
+            exclude: ["Snapshots"],
             resources: [.copy("Fixtures")]
         ),
     ]
