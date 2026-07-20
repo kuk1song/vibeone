@@ -129,6 +129,92 @@ final class MCPTranslationTests: XCTestCase {
         XCTAssertEqual(CodexMCP.read(toml: toml).map(\.name), ["my server"])
     }
 
+    // MARK: - Remote headers ↔ the official Codex fields
+
+    /// Codex's remote-server auth lives in three dedicated fields —
+    /// `http_headers` (literal values), `env_http_headers` (header → env var
+    /// name), `bearer_token_env_var` (Authorization: Bearer from an env var).
+    /// They map onto Claude's single literal `headers` map via its `${VAR}`
+    /// expansion syntax.
+    func testCodexReadsRemoteHeadersFromOfficialFields() {
+        let toml = """
+            [mcp_servers.linear]
+            url = "https://mcp.linear.app/mcp"
+            http_headers = { X-Client = "vibeone" }
+
+            [mcp_servers.linear.env_http_headers]
+            X-Api-Key = "LINEAR_API_KEY"
+
+            [mcp_servers.issues]
+            url = "https://issues.example.com/mcp"
+            bearer_token_env_var = "ISSUES_TOKEN"
+            """
+        let servers = CodexMCP.read(toml: toml)
+        XCTAssertEqual(servers.map(\.name), ["issues", "linear"])
+        guard case .remote(_, _, let issuesHeaders) = servers[0].transport,
+            case .remote(_, _, let linearHeaders) = servers[1].transport
+        else { return XCTFail("both should be remote") }
+        XCTAssertEqual(issuesHeaders, ["Authorization": "Bearer ${ISSUES_TOKEN}"])
+        XCTAssertEqual(
+            linearHeaders, ["X-Client": "vibeone", "X-Api-Key": "${LINEAR_API_KEY}"])
+    }
+
+    /// `env` is a stdio-only field in Codex config; on a url server it is not
+    /// header configuration and must not be read as such.
+    func testCodexReadDoesNotTreatEnvAsRemoteHeaders() {
+        let toml = """
+            [mcp_servers.remote]
+            url = "https://mcp.example.com/mcp"
+            env = { STRAY = "value" }
+            """
+        guard case .remote(_, _, let headers) = CodexMCP.read(toml: toml)[0].transport else {
+            return XCTFail("expected remote")
+        }
+        XCTAssertEqual(headers, [:])
+    }
+
+    func testCodexRendersRemoteHeadersToOfficialFields() {
+        let server = MCPServer(
+            name: "api",
+            transport: .remote(
+                url: "https://api.example.com/mcp", kind: .http,
+                headers: [
+                    "Authorization": "Bearer ${API_KEY}",
+                    "X-Static": "literal-value",
+                    "X-Env": "${MY_VAR}",
+                ]))
+        let block = CodexMCP.render(server)
+        XCTAssertTrue(block.contains("bearer_token_env_var = \"API_KEY\""))
+        XCTAssertTrue(block.contains("http_headers = { X-Static = \"literal-value\" }"))
+        XCTAssertTrue(block.contains("env_http_headers = { X-Env = \"MY_VAR\" }"))
+        XCTAssertFalse(block.contains("env = {"), "env is stdio-only, never a header field")
+
+        // The three-way split must be lossless: re-reading recovers the exact map.
+        guard case .remote(let url, _, let headers) = CodexMCP.read(toml: block)[0].transport
+        else { return XCTFail("expected remote") }
+        XCTAssertEqual(url, "https://api.example.com/mcp")
+        XCTAssertEqual(
+            headers,
+            [
+                "Authorization": "Bearer ${API_KEY}",
+                "X-Static": "literal-value",
+                "X-Env": "${MY_VAR}",
+            ])
+    }
+
+    /// A value that only *embeds* `${VAR}` mid-string has no faithful Codex
+    /// field (env_http_headers replaces the whole value) — it stays literal in
+    /// http_headers rather than being mangled.
+    func testCodexKeepsPartiallyEmbeddedEnvVarLiteral() {
+        let server = MCPServer(
+            name: "api",
+            transport: .remote(
+                url: "https://x", kind: .http, headers: ["X-Mixed": "v=${VAR};tail"]))
+        let block = CodexMCP.render(server)
+        XCTAssertTrue(block.contains("http_headers = { X-Mixed = \"v=${VAR};tail\" }"))
+        XCTAssertFalse(block.contains("env_http_headers"))
+    }
+
     // MARK: - Codex write (append-only, preservation)
 
     func testCodexMergedAppendsAndPreservesExistingVerbatim() {
@@ -202,7 +288,10 @@ final class MCPTranslationTests: XCTestCase {
                 name: "fs",
                 transport: .stdio(command: "npx", args: ["-y", "@mcp/fs"], env: ["ROOT": "/tmp"])),
             MCPServer(
-                name: "stripe", transport: .remote(url: "https://x", kind: .http, headers: [:])),
+                name: "stripe",
+                transport: .remote(
+                    url: "https://x", kind: .http,
+                    headers: ["Authorization": "Bearer ${STRIPE_KEY}", "X-Client": "vibeone"])),
         ]
         // Claude → TOML → back.
         let toml = CodexMCP.merged(original, intoTOML: "")
@@ -215,9 +304,20 @@ final class MCPTranslationTests: XCTestCase {
         } else {
             XCTFail("fs should survive as stdio")
         }
+        if case .remote(_, _, let h) = viaCodex[1].transport {
+            XCTAssertEqual(h, ["Authorization": "Bearer ${STRIPE_KEY}", "X-Client": "vibeone"])
+        } else {
+            XCTFail("stripe should survive as remote")
+        }
         // Codex → JSON → back.
         let json = ClaudeMCP.merged(viaCodex, intoJSON: "")
-        XCTAssertEqual(ClaudeMCP.read(json: json).map(\.name), ["fs", "stripe"])
+        let viaClaude = ClaudeMCP.read(json: json)
+        XCTAssertEqual(viaClaude.map(\.name), ["fs", "stripe"])
+        if case .remote(_, _, let h) = viaClaude[1].transport {
+            XCTAssertEqual(h, ["Authorization": "Bearer ${STRIPE_KEY}", "X-Client": "vibeone"])
+        } else {
+            XCTFail("stripe should survive as remote in JSON")
+        }
     }
 
     func testRenderEscapesSpecialCharacters() {

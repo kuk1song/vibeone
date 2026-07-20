@@ -6,7 +6,10 @@ import Foundation
 /// translate through.
 ///
 /// v0 models the common subset both formats agree on (stdio command/args/env and
-/// remote url/headers). Advanced keys — Codex timeouts / tool allowlists,
+/// remote url/headers). Remote `headers` carry Claude's literal semantics —
+/// values may use its `${VAR}` env expansion — and `CodexMCP` translates them
+/// to/from Codex's official remote fields (`http_headers` / `env_http_headers` /
+/// `bearer_token_env_var`). Advanced keys — Codex timeouts / tool allowlists,
 /// Claude per-server `timeout` — are NOT modeled; the sync never rewrites an
 /// existing server, so those keys survive untouched (see `CodexMCP` /
 /// `ClaudeMCP`). This boundary is the MCP analogue of PARSERS §4.
