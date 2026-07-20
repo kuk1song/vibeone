@@ -4,6 +4,12 @@ import Foundation
 /// <uuid>.jsonl`). Format details + the IR mapping are in `local_notes/PARSERS.md`.
 public enum ClaudeSession {
 
+    /// Line type of a pointer stub (seen 2026-07, PARSERS §1): the whole file is
+    /// one short line referencing a session stored elsewhere — not a conversation.
+    /// `read` already ignores it like any non-chat line; enumeration must skip
+    /// such files entirely instead of surfacing them as empty sessions.
+    static let bridgeSessionType = "bridge-session"
+
     // MARK: - Read
 
     /// Parse a Claude `.jsonl` transcript into the canonical IR.

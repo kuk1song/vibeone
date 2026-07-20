@@ -38,8 +38,13 @@ enum RealData {
     /// the cap is named and documented).
     static let maxCases = 50
 
-    /// One representative `.jsonl` transcript per project under
-    /// `~/.claude/projects` (capped at `maxCases`).
+    /// One representative *conversation* transcript per project under
+    /// `~/.claude/projects` (capped at `maxCases`). A project dir also holds
+    /// `.jsonl` files that are not conversations — bridge-session pointer stubs,
+    /// and sessions that never got past mode/system lines — so a candidate counts
+    /// only if the real reader already recovers a cwd and a message from its head
+    /// window. That keeps the strict real-data assertions applicable to every
+    /// surfaced file without duplicating any parsing logic here.
     static let claudeSessionFiles: [URL] = {
         let fm = FileManager.default
         let projects = fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
@@ -48,11 +53,15 @@ enum RealData {
         else { return [] }
         var out: [URL] = []
         for dir in dirs {
-            if let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil),
-                let jsonl = files.first(where: { $0.pathExtension == "jsonl" })
-            {
-                out.append(jsonl)
+            guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            else { continue }
+            let transcript = files.first { url in
+                guard url.pathExtension == "jsonl" else { return false }
+                let head = ClaudeSession.read(
+                    jsonl: FileHead.lines(of: url).joined(separator: "\n"))
+                return !head.workspace.isEmpty && !head.messages.isEmpty
             }
+            if let transcript { out.append(transcript) }
         }
         return Array(out.prefix(maxCases))
     }()

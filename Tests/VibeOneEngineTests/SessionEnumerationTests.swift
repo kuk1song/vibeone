@@ -74,6 +74,24 @@ private func writeUnmarkedClaude(home: URL, workspace: String, id: String, modif
     return url
 }
 
+/// The bridge-session pointer stub Claude Code drops beside real transcripts:
+/// the whole file is one line referencing a session stored elsewhere — it is
+/// not a conversation and must never surface as a session.
+@discardableResult
+private func writeBridgeStub(home: URL, workspace: String, id: String, modified: Date) throws
+    -> URL
+{
+    let url = SessionLocation.claudeSessionURL(home: home, workspace: workspace, sessionId: id)
+    try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let stub =
+        #"{"type":"bridge-session","sessionId":"\#(id)","#
+        + #""bridgeSessionId":"11111111-1111-1111-1111-111111111111","lastSequenceNum":7}"#
+    try stub.write(to: url, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+    return url
+}
+
 private func at(_ t: TimeInterval) -> Date { Date(timeIntervalSince1970: t) }
 
 // MARK: - Claude enumeration
@@ -130,6 +148,31 @@ struct ClaudeListTests {
         let home = try makeTempHome()
         defer { try? FileManager.default.removeItem(at: home) }
         #expect(ClaudeSessionStore(home: home).list().isEmpty)
+    }
+
+    @Test("skips a bridge-session pointer stub beside real transcripts")
+    func skipsBridgeSessionStub() throws {
+        let home = try makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let ws = "/Users/kuki/proj"
+        try writeClaude(home: home, workspace: ws, id: "real", modified: at(1000))
+        try writeBridgeStub(home: home, workspace: ws, id: "stub", modified: at(2000))
+
+        let list = ClaudeSessionStore(home: home).list()
+        #expect(list.map(\.id) == ["real"])
+    }
+
+    @Test("latestSession skips a newer bridge-session stub")
+    func latestSessionSkipsBridgeStub() throws {
+        let home = try makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let ws = "/Users/kuki/proj"
+        let real = try writeClaude(home: home, workspace: ws, id: "real", modified: at(1000))
+        try writeBridgeStub(home: home, workspace: ws, id: "stub", modified: at(2000))
+
+        // Resolve symlinks: the enumerator hands back /private/var for a /var temp dir.
+        let latest = ClaudeSessionStore(home: home).latestSession(workspace: ws)
+        #expect(latest?.resolvingSymlinksInPath() == real.resolvingSymlinksInPath())
     }
 
     @Test("flags VibeOne-written transcripts; treats unmarked ones as the user's own")
