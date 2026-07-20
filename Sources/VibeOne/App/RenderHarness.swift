@@ -103,7 +103,8 @@ enum RenderHarness {
             memory: .init(agentsExists: true, claudeImportsAgents: true, claudeHasContent: true),
             mcp: .init(
                 claudeServers: ["filesystem"], codexServers: ["filesystem"],
-                missingInCodex: [], missingInClaude: [], userScopeServers: []),
+                missingInCodex: [], missingInClaude: [], userScopeServers: [],
+                codexGlobalServers: []),
             skills: .init(
                 claudeSkills: ["web-access"], codexSkills: [],
                 missingInCodex: ["web-access"], missingInClaude: []))

@@ -41,8 +41,17 @@ public enum ConfigLocation {
         home.appendingPathComponent(".claude.json")
     }
 
-    /// Codex's single config file (`~/.codex/config.toml`) — MCP servers live in
-    /// `[mcp_servers.<id>]` tables alongside unrelated config.
+    /// Codex's project-level config (`<workspace>/.codex/config.toml`) — the
+    /// Codex-side home of project MCP servers and the file sync writes.
+    /// Officially supported; Codex loads it for trusted projects.
+    public static func codexProjectConfig(workspace: String) -> URL {
+        workspaceURL(workspace).appendingPathComponent(".codex/config.toml")
+    }
+
+    /// Codex's global config file (`~/.codex/config.toml`) — MCP servers live in
+    /// `[mcp_servers.<id>]` tables alongside unrelated config. It belongs to the
+    /// user and the app (Codex Desktop registers its bundled helpers there), so
+    /// sync reads it for visibility but never writes it.
     public static func codexConfig(home: URL) -> URL {
         home.appendingPathComponent(".codex/config.toml")
     }

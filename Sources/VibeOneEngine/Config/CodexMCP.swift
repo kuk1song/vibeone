@@ -1,9 +1,12 @@
 import Foundation
 
 /// Read/write the Codex side of MCP config: `[mcp_servers.<id>]` tables inside
-/// `~/.codex/config.toml` (table syntax + keys verified against Codex's config
-/// reference). MCP shares this file with unrelated config, so writes are
-/// surgical and never reserialize the whole document.
+/// a Codex `config.toml` (table syntax + keys verified against Codex's config
+/// reference). Callers pick the file — the project's
+/// `<workspace>/.codex/config.toml` for sync, the global `~/.codex/config.toml`
+/// for read-only visibility (`ConfigLocation`). MCP shares the file with
+/// unrelated config, so writes are surgical and never reserialize the whole
+/// document.
 ///
 /// **Read** is a tolerant subset parser (the common stdio/remote keys; anything
 /// unrecognized is skipped, never fatal). **Write is append-only**: existing
@@ -118,7 +121,8 @@ public enum CodexMCP {
             }
             for (k, v) in maps["env_http_headers"] ?? [:] { headers[k] = "${\(v)}" }
             for (k, v) in maps["http_headers"] ?? [:] { headers[k] = v }
-            return MCPServer(name: name, transport: .remote(url: url, kind: .http, headers: headers))
+            return MCPServer(
+                name: name, transport: .remote(url: url, kind: .http, headers: headers))
         }
         return nil
     }

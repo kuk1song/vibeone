@@ -25,13 +25,22 @@ final class MCPSyncTests: XCTestCase {
     private func writeClaudeMCP(_ s: String) throws {
         try s.write(to: ws.appendingPathComponent(".mcp.json"), atomically: true, encoding: .utf8)
     }
+    /// The project-level Codex config — the file sync reads and writes.
     private func writeCodexConfig(_ s: String) throws {
+        let dir = ws.appendingPathComponent(".codex")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try s.write(
+            to: dir.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+    }
+    /// The global Codex config — read-only visibility, never a sync target.
+    private func writeCodexGlobalConfig(_ s: String) throws {
         try s.write(
             to: home.appendingPathComponent(".codex/config.toml"), atomically: true, encoding: .utf8
         )
     }
     private func readCodexConfig() throws -> String {
-        try String(contentsOf: home.appendingPathComponent(".codex/config.toml"), encoding: .utf8)
+        try String(
+            contentsOf: ws.appendingPathComponent(".codex/config.toml"), encoding: .utf8)
     }
 
     func testStatusReportsBidirectionalMissing() throws {
@@ -101,7 +110,8 @@ final class MCPSyncTests: XCTestCase {
         func stdio(_ command: String) -> MCPServer {
             MCPServer(name: "s", transport: .stdio(command: command, args: [], env: [:]))
         }
-        XCTAssertTrue(stdio("/Applications/Codex.app/Contents/Resources/x/node_repl").isAgentInternal)
+        XCTAssertTrue(
+            stdio("/Applications/Codex.app/Contents/Resources/x/node_repl").isAgentInternal)
         XCTAssertTrue(
             stdio("/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl")
                 .isAgentInternal)
@@ -169,8 +179,85 @@ final class MCPSyncTests: XCTestCase {
         XCTAssertEqual(outcome.addedToCodex, [])
         XCTAssertFalse(
             FileManager.default.fileExists(
-                atPath: home.appendingPathComponent(".codex/config.toml").path),
+                atPath: ws.appendingPathComponent(".codex/config.toml").path),
             "nothing to sync — Codex config must not even be created")
         XCTAssertTrue(MCPSync.status(workspace: ws.path, home: home).inSync)
+    }
+
+    // MARK: - Project-to-project scope (global configs are read-only visibility)
+
+    /// The sync target on the Codex side is the project's own
+    /// `<workspace>/.codex/config.toml`. The global `~/.codex/config.toml`
+    /// belongs to the user and the app: it must never be written, and its
+    /// servers must not be copied into a project's `.mcp.json`.
+    func testApplyWritesProjectCodexConfigAndNeverTouchesGlobal() throws {
+        try writeClaudeMCP("{\"mcpServers\":{\"fs\":{\"command\":\"a\"}}}")
+        let globalTOML = "model = \"gpt-5.4\"\n\n[mcp_servers.globalTool]\ncommand = \"g\"\n"
+        try writeCodexGlobalConfig(globalTOML)
+
+        let outcome = try MCPSync.apply(workspace: ws.path, home: home, timestamp: { "TS" })
+
+        XCTAssertEqual(outcome.addedToCodex, ["fs"])
+        XCTAssertEqual(outcome.addedToClaude, [], "global servers must not flow into the project")
+        XCTAssertEqual(CodexMCP.read(toml: try readCodexConfig()).map(\.name), ["fs"])
+        XCTAssertEqual(
+            try String(
+                contentsOf: home.appendingPathComponent(".codex/config.toml"), encoding: .utf8),
+            globalTOML, "the global Codex config must survive byte-for-byte")
+    }
+
+    func testStatusTreatsGlobalCodexServersAsVisibilityOnly() throws {
+        try writeCodexGlobalConfig("[mcp_servers.globalTool]\ncommand = \"g\"\n")
+        let status = MCPSync.status(workspace: ws.path, home: home)
+        XCTAssertEqual(status.codexServers, [])
+        XCTAssertEqual(status.codexGlobalServers, ["globalTool"])
+        XCTAssertEqual(status.missingInClaude, [])
+        XCTAssertTrue(status.inSync)
+    }
+
+    /// A Claude project server that Codex already sees globally is not a
+    /// divergence — flagging (and then writing) it would just duplicate config.
+    func testStatusDoesNotFlagClaudeServerCodexAlreadySeesGlobally() throws {
+        try writeClaudeMCP("{\"mcpServers\":{\"fs\":{\"command\":\"a\"}}}")
+        try writeCodexGlobalConfig("[mcp_servers.fs]\ncommand = \"a\"\n")
+        let status = MCPSync.status(workspace: ws.path, home: home)
+        XCTAssertEqual(status.missingInCodex, [])
+        XCTAssertTrue(status.inSync)
+        let outcome = try MCPSync.apply(workspace: ws.path, home: home, timestamp: { "TS" })
+        XCTAssertEqual(outcome.addedToCodex, [])
+    }
+
+    /// Claude-side effective visibility = project `.mcp.json` + user scope
+    /// (top-level `mcpServers` in `~/.claude.json`) + local scope for THIS
+    /// workspace (`projects.<workspace>.mcpServers`). Another project's local
+    /// scope does not count.
+    func testStatusRespectsClaudeUserAndLocalScopeVisibility() throws {
+        try writeCodexConfig(
+            """
+            [mcp_servers.userScoped]
+            command = "a"
+
+            [mcp_servers.localScoped]
+            command = "c"
+
+            [mcp_servers.otherProjectOnly]
+            command = "b"
+            """)
+        let claudeUser = """
+            {"mcpServers":{"userScoped":{"command":"a"}},
+             "projects":{
+               "\(ws.path)":{"mcpServers":{"localScoped":{"command":"c"}}},
+               "/somewhere/else":{"mcpServers":{"otherProjectOnly":{"command":"b"}}}}}
+            """
+        try claudeUser.write(
+            to: home.appendingPathComponent(".claude.json"), atomically: true, encoding: .utf8)
+
+        let status = MCPSync.status(workspace: ws.path, home: home)
+        XCTAssertEqual(
+            status.missingInClaude, ["otherProjectOnly"],
+            "another project's local scope must not satisfy this project")
+
+        let outcome = try MCPSync.apply(workspace: ws.path, home: home, timestamp: { "TS" })
+        XCTAssertEqual(outcome.addedToClaude, ["otherProjectOnly"])
     }
 }
