@@ -93,9 +93,35 @@ final class MCPSyncTests: XCTestCase {
 
     // MARK: - Agent-internal servers (never synced, never counted)
 
+    /// The internal-plumbing test: a binary living inside the agent's app bundle
+    /// (Codex.app before 26.715, ChatGPT.app after the rename) or the bundled
+    /// computer-use helper app, whose command is registered with a *relative*
+    /// path plus `cwd` — all observed in real configs on this machine.
+    func testAgentInternalCoversBothAppErasAndRelativeHelperPath() {
+        func stdio(_ command: String) -> MCPServer {
+            MCPServer(name: "s", transport: .stdio(command: command, args: [], env: [:]))
+        }
+        XCTAssertTrue(stdio("/Applications/Codex.app/Contents/Resources/x/node_repl").isAgentInternal)
+        XCTAssertTrue(
+            stdio("/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl")
+                .isAgentInternal)
+        XCTAssertTrue(
+            stdio(
+                "./Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+            ).isAgentInternal)
+        XCTAssertFalse(stdio("/usr/local/bin/mcp-server").isAgentInternal)
+        XCTAssertFalse(
+            MCPServer(
+                name: "docs",
+                transport: .remote(
+                    url: "https://developers.openai.com/mcp", kind: .http, headers: [:])
+            ).isAgentInternal)
+    }
+
     /// Codex Desktop registers its own bundled helper (`node_repl`, shipped
-    /// inside Codex.app) in config.toml. That's the app's private plumbing, not
-    /// user configuration — it must not leak to the other agent or count as drift.
+    /// inside the app bundle) in config.toml. That's the app's private plumbing,
+    /// not user configuration — it must not leak to the other agent or count as
+    /// drift.
     func testStatusIgnoresCodexInternalServers() throws {
         try writeCodexConfig(
             """
@@ -127,12 +153,17 @@ final class MCPSyncTests: XCTestCase {
         XCTAssertFalse(json.contains("node_repl"), "internal server must not leak to Claude")
     }
 
-    /// An internal server that already leaked into a project's .mcp.json (synced
-    /// by an earlier build) must not bounce back into Codex or count as drift.
+    /// Internal servers that already leaked into a project's .mcp.json (synced by
+    /// an earlier build; this is the real leaked shape — ChatGPT.app-era absolute
+    /// path plus the relative-path computer-use helper) must not bounce back into
+    /// Codex or count as drift.
     func testApplyIgnoresLeakedInternalServerInClaudeConfig() throws {
         try writeClaudeMCP(
             """
-            {"mcpServers":{"node_repl":{"command":"/Applications/Codex.app/Contents/Resources/cua_node/bin/node_repl"}}}
+            {"mcpServers":{
+              "node_repl":{"command":"/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl"},
+              "computer-use":{"command":"./Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient","args":["mcp"]}
+            }}
             """)
         let outcome = try MCPSync.apply(workspace: ws.path, home: home, timestamp: { "TS" })
         XCTAssertEqual(outcome.addedToCodex, [])

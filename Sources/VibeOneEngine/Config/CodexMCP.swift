@@ -74,6 +74,8 @@ public enum CodexMCP {
                 fields[server]?["args"] = valueText  // parsed lazily below
             case "env":
                 for (k, v) in parseInlineTable(valueText) { envs[server, default: [:]][k] = v }
+            case "enabled":
+                fields[server]?["enabled"] = valueText  // TOML boolean, bare
             default:
                 continue  // cwd / timeouts / tool lists — not modeled (preserved on write)
             }
@@ -88,6 +90,10 @@ public enum CodexMCP {
     private static func buildServer(
         name: String, fields: [String: String], env: [String: String]
     ) -> MCPServer? {
+        // `enabled = false` = disabled in place (Codex Desktop does this for its
+        // bundled helpers). Not part of the effective config → not read, so it
+        // can neither sync across nor count as drift.
+        if fields["enabled"] == "false" { return nil }
         if let command = fields["command"] {
             let args = fields["args"].map(parseStringArray) ?? []
             return MCPServer(name: name, transport: .stdio(command: command, args: args, env: env))

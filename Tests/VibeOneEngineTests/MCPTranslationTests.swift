@@ -102,6 +102,25 @@ final class MCPTranslationTests: XCTestCase {
         XCTAssertEqual(servers.map(\.name), ["fs"])
     }
 
+    /// Codex Desktop disables servers in place with `enabled = false` (observed
+    /// with its bundled computer-use helper). A disabled server is not part of
+    /// the effective config, so it must not sync or count as drift — the earlier
+    /// behavior dropped the flag and re-enabled the server on the Claude side.
+    func testCodexReadSkipsDisabledServers() {
+        let toml = """
+            [mcp_servers.computer-use]
+            command = "./Codex Computer Use.app/Contents/MacOS/SkyComputerUseClient"
+            args = ["mcp"]
+            cwd = "."
+            enabled = false
+
+            [mcp_servers.active]
+            command = "run"
+            enabled = true
+            """
+        XCTAssertEqual(CodexMCP.read(toml: toml).map(\.name), ["active"])
+    }
+
     func testCodexReadHandlesQuotedServerName() {
         let toml = """
             [mcp_servers."my server"]

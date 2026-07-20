@@ -34,13 +34,17 @@ public struct MCPServer: Equatable, Sendable {
     }
 
     /// True when this server is another agent's private plumbing rather than
-    /// user configuration — Codex Desktop registers its bundled browser-control
-    /// helper (`node_repl`) in its own config.toml, with the binary living
-    /// inside Codex.app. Sharing that with the other agent is meaningless (the
-    /// command and env are app internals) and only triggers approval prompts,
-    /// so sync skips these in both directions and status doesn't count them.
+    /// user configuration — Codex Desktop registers its bundled helpers in its
+    /// own config.toml with binaries living inside an app bundle: `node_repl`
+    /// under Codex.app (pre-26.715) / ChatGPT.app (the renamed bundle), and the
+    /// computer-use client inside "Codex Computer Use.app" (registered with a
+    /// *relative* command plus `cwd`, hence no leading slash in that marker).
+    /// Sharing these with the other agent is meaningless (the command and env
+    /// are app internals) and only triggers approval prompts, so sync skips
+    /// them in both directions and status doesn't count them.
     public var isAgentInternal: Bool {
         guard case .stdio(let command, _, _) = transport else { return false }
-        return command.contains("/Codex.app/")
+        let markers = ["/Codex.app/", "/ChatGPT.app/", "Codex Computer Use.app/"]
+        return markers.contains { command.contains($0) }
     }
 }
