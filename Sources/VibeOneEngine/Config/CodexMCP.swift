@@ -1,9 +1,12 @@
 import Foundation
 
 /// Read/write the Codex side of MCP config: `[mcp_servers.<id>]` tables inside
-/// `~/.codex/config.toml` (table syntax + keys verified against Codex's config
-/// reference). MCP shares this file with unrelated config, so writes are
-/// surgical and never reserialize the whole document.
+/// a Codex `config.toml` (table syntax + keys verified against Codex's config
+/// reference). Callers pick the file — the project's
+/// `<workspace>/.codex/config.toml` for sync, the global `~/.codex/config.toml`
+/// for read-only visibility (`ConfigLocation`). MCP shares the file with
+/// unrelated config, so writes are surgical and never reserialize the whole
+/// document.
 ///
 /// **Read** is a tolerant subset parser (the common stdio/remote keys; anything
 /// unrecognized is skipped, never fatal). **Write is append-only**: existing
@@ -16,18 +19,23 @@ public enum CodexMCP {
 
     // MARK: - Read
 
+    /// The map-valued keys we model, each accepted as an inline table
+    /// (`{ K = "v" }`) or an `[mcp_servers.<id>.<key>]` sub-table: `env` (stdio
+    /// process environment), `http_headers` (remote, literal values) and
+    /// `env_http_headers` (remote, header → env var *name*).
+    private static let mapKeys: Set<String> = ["env", "http_headers", "env_http_headers"]
+
     /// Parse `[mcp_servers.<id>]` tables into servers, sorted by name. Handles the
-    /// common forms Codex emits: `command`/`url` strings, single-line `args`
-    /// arrays, and `env` as either an inline table (`{ K = "v" }`) or an
-    /// `[mcp_servers.<id>.env]` sub-table.
+    /// common forms Codex emits: `command`/`url`/`bearer_token_env_var` strings,
+    /// `enabled` booleans, single-line `args` arrays, and the map keys above.
     public static func read(toml: String) -> [MCPServer] {
         // Accumulate per-server fields keyed by server name, in first-seen order.
         var order: [String] = []
-        var fields: [String: [String: String]] = [:]  // name -> (command/url/argsRaw)
-        var envs: [String: [String: String]] = [:]  // name -> env map (from sub-table)
+        var fields: [String: [String: String]] = [:]  // name -> scalar fields
+        var maps: [String: [String: [String: String]]] = [:]  // name -> map key -> map
 
         var currentServer: String?
-        var inEnvSubtable = false
+        var currentMapKey: String?  // non-nil inside a [mcp_servers.<id>.<mapKey>] sub-table
 
         for rawLine in toml.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = stripComment(String(rawLine)).trimmingCharacters(in: .whitespaces)
@@ -36,7 +44,7 @@ public enum CodexMCP {
             if line.hasPrefix("[") {
                 // A new table header ends any previous server context.
                 currentServer = nil
-                inEnvSubtable = false
+                currentMapKey = nil
                 guard line.hasPrefix("["), line.hasSuffix("]"), !line.hasPrefix("[[") else {
                     continue
                 }
@@ -49,7 +57,7 @@ public enum CodexMCP {
                     fields[name] = [:]
                 }
                 currentServer = name
-                inEnvSubtable = segs.count == 3 && segs[2] == "env"
+                if segs.count == 3, mapKeys.contains(segs[2]) { currentMapKey = segs[2] }
                 continue
             }
 
@@ -60,40 +68,61 @@ public enum CodexMCP {
             let valueText = String(line[line.index(after: eq)...]).trimmingCharacters(
                 in: .whitespaces)
 
-            if inEnvSubtable {
+            if let mapKey = currentMapKey {
                 if let v = parseString(valueText) {
-                    envs[server, default: [:]][unquoteKey(key)] = v
+                    maps[server, default: [:]][mapKey, default: [:]][unquoteKey(key)] = v
                 }
                 continue
             }
 
             switch key {
-            case "command", "url":
+            case "command", "url", "bearer_token_env_var":
                 if let v = parseString(valueText) { fields[server]?[key] = v }
             case "args":
                 fields[server]?["args"] = valueText  // parsed lazily below
-            case "env":
-                for (k, v) in parseInlineTable(valueText) { envs[server, default: [:]][k] = v }
+            case "enabled":
+                fields[server]?["enabled"] = valueText  // TOML boolean, bare
+            case _ where mapKeys.contains(key):
+                for (k, v) in parseInlineTable(valueText) {
+                    maps[server, default: [:]][key, default: [:]][k] = v
+                }
             default:
                 continue  // cwd / timeouts / tool lists — not modeled (preserved on write)
             }
         }
 
         return order.compactMap { name in
-            buildServer(name: name, fields: fields[name] ?? [:], env: envs[name] ?? [:])
+            buildServer(name: name, fields: fields[name] ?? [:], maps: maps[name] ?? [:])
         }
         .sorted { $0.name < $1.name }
     }
 
     private static func buildServer(
-        name: String, fields: [String: String], env: [String: String]
+        name: String, fields: [String: String], maps: [String: [String: String]]
     ) -> MCPServer? {
+        // `enabled = false` = disabled in place (Codex Desktop does this for its
+        // bundled helpers). Not part of the effective config → not read, so it
+        // can neither sync across nor count as drift.
+        if fields["enabled"] == "false" { return nil }
         if let command = fields["command"] {
             let args = fields["args"].map(parseStringArray) ?? []
-            return MCPServer(name: name, transport: .stdio(command: command, args: args, env: env))
+            return MCPServer(
+                name: name,
+                transport: .stdio(command: command, args: args, env: maps["env"] ?? [:]))
         }
         if let url = fields["url"] {
-            return MCPServer(name: name, transport: .remote(url: url, kind: .http, headers: env))
+            // Compose Codex's three official auth fields into Claude's single
+            // literal headers map (`${VAR}` = Claude's env expansion syntax);
+            // `env` is stdio-only and deliberately ignored here. A literal
+            // http_headers entry wins over an indirect one for the same header.
+            var headers: [String: String] = [:]
+            if let bearer = fields["bearer_token_env_var"] {
+                headers["Authorization"] = "Bearer ${\(bearer)}"
+            }
+            for (k, v) in maps["env_http_headers"] ?? [:] { headers[k] = "${\(v)}" }
+            for (k, v) in maps["http_headers"] ?? [:] { headers[k] = v }
+            return MCPServer(
+                name: name, transport: .remote(url: url, kind: .http, headers: headers))
         }
         return nil
     }
@@ -140,16 +169,57 @@ public enum CodexMCP {
             appendEnv(env, to: &lines)
         case .remote(let url, _, let headers):
             lines.append("url = \(quote(url))")
-            appendEnv(headers, to: &lines)
+            appendRemoteHeaders(headers, to: &lines)
         }
         return lines.joined(separator: "\n") + "\n"
     }
 
     private static func appendEnv(_ env: [String: String], to lines: inout [String]) {
         guard !env.isEmpty else { return }
-        let pairs = env.sorted { $0.key < $1.key }
+        lines.append("env = { \(inlineTable(env)) }")
+    }
+
+    /// Split Claude's literal headers map into Codex's three official remote
+    /// auth fields: `Authorization: Bearer ${VAR}` → `bearer_token_env_var`, a
+    /// whole-value `${VAR}` → `env_http_headers` (Codex substitutes the env var
+    /// at launch), everything else → `http_headers` verbatim. A value that only
+    /// embeds `${VAR}` mid-string has no faithful Codex field and stays literal.
+    /// `env` is a stdio-only field and is never emitted for a url server.
+    private static func appendRemoteHeaders(_ headers: [String: String], to lines: inout [String]) {
+        var literal: [String: String] = [:]
+        var indirect: [String: String] = [:]
+        var bearer: String?
+        for (name, value) in headers {
+            if name == "Authorization", value.hasPrefix("Bearer "),
+                let v = envVarName(String(value.dropFirst("Bearer ".count)))
+            {
+                bearer = v
+            } else if let v = envVarName(value) {
+                indirect[name] = v
+            } else {
+                literal[name] = value
+            }
+        }
+        if let bearer { lines.append("bearer_token_env_var = \(quote(bearer))") }
+        if !literal.isEmpty { lines.append("http_headers = { \(inlineTable(literal)) }") }
+        if !indirect.isEmpty { lines.append("env_http_headers = { \(inlineTable(indirect)) }") }
+    }
+
+    private static func inlineTable(_ map: [String: String]) -> String {
+        map.sorted { $0.key < $1.key }
             .map { "\(formatKey($0.key)) = \(quote($0.value))" }
-        lines.append("env = { \(pairs.joined(separator: ", ")) }")
+            .joined(separator: ", ")
+    }
+
+    /// The env var name if `value` is exactly `${NAME}` (Claude's whole-value
+    /// env expansion), else nil.
+    private static func envVarName(_ value: String) -> String? {
+        guard value.hasPrefix("${"), value.hasSuffix("}"), value.count > 3 else { return nil }
+        let name = value.dropFirst(2).dropLast()
+        guard let first = name.first, first.isLetter || first == "_",
+            name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" })
+        else { return nil }
+        return String(name)
     }
 
     // MARK: - TOML scalar helpers

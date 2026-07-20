@@ -41,10 +41,11 @@ struct ConfigSyncTests {
     @Test func projectLevelSyncsMemoryAndProjectMCPButNotSkills() throws {
         let s = try Sandbox()
         defer { s.cleanup() }
-        // Claude-first project (memory adopts) + a Codex-only MCP server + a
-        // Codex-only skill that project-level sync must leave alone.
+        // Claude-first project (memory adopts) + a Codex-only project MCP server
+        // + a Codex-only skill that project-level sync must leave alone.
         try s.write("CLAUDE.md", under: s.workspace, "# rules\nbe terse\n")
-        try s.write(".codex/config.toml", under: s.home, "[mcp_servers.fs]\ncommand = \"a\"\n")
+        try s.write(
+            ".codex/config.toml", under: s.workspace, "[mcp_servers.fs]\ncommand = \"a\"\n")
         try s.write(".codex/skills/web-access/SKILL.md", under: s.home, "# skill\n")
 
         let report = ConfigSync.run(
@@ -90,13 +91,15 @@ struct ConfigSyncTests {
             try? s.fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: s.workspace.path)
             s.cleanup()
         }
-        // Project files live in a read-only workspace, so the memory write fails.
-        // MCP is arranged to write only into the (writable) home config, so it
-        // still syncs — one dimension failing must not block the other.
+        // The workspace ROOT is read-only, so the memory write (AGENTS.md at the
+        // root) fails. The MCP write lands inside the pre-created, still-writable
+        // `.codex/` subdirectory, so it succeeds — one dimension failing must not
+        // block the other.
         try s.write("CLAUDE.md", under: s.workspace, "# rules\n")  // adopt target
         try s.write(
             ".mcp.json", under: s.workspace, "{\"mcpServers\":{\"foo\":{\"command\":\"a\"}}}")
-        try s.write(".codex/config.toml", under: s.home, "")  // foo missing in Codex → writes home
+        try s.fm.createDirectory(
+            at: s.workspace.appendingPathComponent(".codex"), withIntermediateDirectories: true)
         try s.fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: s.workspace.path)
 
         let report = ConfigSync.run(
@@ -108,7 +111,7 @@ struct ConfigSyncTests {
         #expect(!mcp.failed)
         #expect(!report.allSucceeded)
         #expect(
-            MCPSync.readCodex(home: s.home).map(\.name) == ["foo"],
+            MCPSync.readCodex(workspace: s.workspace.path).map(\.name) == ["foo"],
             "the working dimension still applied")
     }
 }

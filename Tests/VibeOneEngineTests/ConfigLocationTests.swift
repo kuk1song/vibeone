@@ -18,6 +18,12 @@ final class ConfigLocationTests: XCTestCase {
             "/Users/kuki/proj/.mcp.json")
     }
 
+    func testCodexProjectConfigSitsUnderWorkspaceDotCodex() {
+        XCTAssertEqual(
+            ConfigLocation.codexProjectConfig(workspace: "/Users/kuki/proj").path,
+            "/Users/kuki/proj/.codex/config.toml")
+    }
+
     func testCodexConfigAndUserConfigPaths() {
         let home = URL(fileURLWithPath: "/Users/kuki")
         XCTAssertEqual(
