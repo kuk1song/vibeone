@@ -55,7 +55,10 @@ public struct ClaudeSessionStore: SessionStore {
             let transcripts = entries.filter { $0.pathExtension == "jsonl" }
             // Read each transcript's head once: all in a dir share one cwd, but the
             // VibeOne mark is per-file (a copy lands beside the user's own sessions).
+            // Bridge-session pointer stubs are not sessions — drop them here so they
+            // never surface as phantom picker rows.
             let headers = transcripts.map { (url: $0, header: header(of: $0)) }
+                .filter { !$0.header.bridgeStub }
             guard let workspace = headers.lazy.compactMap({ $0.header.cwd }).first else { continue }
             for entry in headers {
                 out.append(
@@ -71,8 +74,9 @@ public struct ClaudeSessionStore: SessionStore {
         return out.sorted { $0.modified != $1.modified ? $0.modified > $1.modified : $0.id < $1.id }
     }
 
-    /// Newest `.jsonl` (by mtime) under this workspace's encoded project dir. The
-    /// dir already scopes to one workspace, so this is a plain newest-in-dir scan.
+    /// Newest `.jsonl` (by mtime) under this workspace's encoded project dir,
+    /// skipping bridge-session pointer stubs. The dir already scopes to one
+    /// workspace, so this is a plain newest-in-dir scan.
     public func latestSession(workspace: String) -> URL? {
         let dir = SessionLocation.claudeProjectsDir(home: home)
             .appendingPathComponent(
@@ -130,7 +134,7 @@ public struct ClaudeSessionStore: SessionStore {
             .filter { $0.pathExtension == "jsonl" }
             .map { (url: $0, modified: modifiedDate($0)) }
             .sorted { $0.modified > $1.modified }
-            .first?.url
+            .first { !header(of: $0.url).bridgeStub }?.url
     }
 
     /// A transcript's project root (its first recorded `cwd`) and whether VibeOne
@@ -143,18 +147,24 @@ public struct ClaudeSessionStore: SessionStore {
     /// never first appear after the first `cwd` — by then both fields are decided.
     /// Without this stop, every genuine (unmarked) transcript paid a full parse of
     /// the head window per popover open just to conclude `generated == false`.
-    private func header(of url: URL) -> (cwd: String?, generated: Bool) {
+    ///
+    /// A `bridge-session` line means the file is a pointer stub, not a session
+    /// (the whole file is that one line) — classification ends there.
+    private func header(of url: URL) -> (cwd: String?, generated: Bool, bridgeStub: Bool) {
         var cwd: String?
         var generated = false
         for raw in FileHead.lines(of: url) {
             guard
                 let obj = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any]
             else { continue }
+            if (obj["type"] as? String) == ClaudeSession.bridgeSessionType {
+                return (nil, false, true)
+            }
             if cwd == nil, let value = obj["cwd"] as? String, !value.isEmpty { cwd = value }
             if (obj[Provenance.claudeKey] as? String) == Provenance.vibeOne { generated = true }
             if cwd != nil { break }
         }
-        return (cwd, generated)
+        return (cwd, generated, false)
     }
 
     /// First recorded `cwd` in a transcript (its project root).
