@@ -5,9 +5,10 @@ import Foundation
 /// trivially testable and reused by the per-dimension sync types.
 ///
 /// Two axes decide a path:
-/// - **project vs. user**: memory + project-scope MCP live at the *workspace*
-///   root (the unit VibeOne syncs is a project); skills + Codex's MCP live under
-///   the user home.
+/// - **project vs. user**: memory + both sides' project MCP live under the
+///   *workspace* (the unit VibeOne syncs is a project — `.mcp.json` and
+///   `.codex/config.toml`); skills live under the user home, and the two
+///   global configs there are read-only visibility, never sync targets.
 /// - **format owner**: Claude reads `CLAUDE.md` / JSON; Codex reads `AGENTS.md` /
 ///   TOML. The mapping itself lives in the per-dimension types.
 public enum ConfigLocation {
