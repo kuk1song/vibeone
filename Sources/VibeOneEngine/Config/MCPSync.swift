@@ -81,6 +81,22 @@ public enum MCPSync {
         public var backups: [URL]
     }
 
+    /// Raised when a write would destroy content sync cannot represent.
+    /// ConfigSync catches it per-dimension: the MCP line reports the failure,
+    /// the other dimensions still run, and the file stays untouched.
+    public enum Failure: Error, Equatable, LocalizedError {
+        /// `.mcp.json` exists but is not a JSON object — merging would rebuild
+        /// it from `{}` and silently discard the original (fail closed instead).
+        case malformedClaudeConfig(path: String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .malformedClaudeConfig(let path):
+                return "\(path) is not valid JSON — fix or remove it, then sync again"
+            }
+        }
+    }
+
     /// Make both sides hold the union of the project's MCP servers. Writes only
     /// the two project-level files, and only when they change, backing each up
     /// first (atomic write). Servers an agent already sees globally are skipped,
@@ -114,11 +130,15 @@ public enum MCPSync {
             addedToCodex = forCodex.map(\.name).sorted()
         }
 
-        // Codex → Claude (JSON), additive merge.
+        // Codex → Claude (JSON), additive merge. Fail closed on an unparseable
+        // file — merging would rebuild it from `{}` and discard the original.
         let forClaude = codex.filter { !claudeVisible.contains($0.name) }
         if !forClaude.isEmpty {
             let url = ConfigLocation.claudeProjectMCP(workspace: workspace)
             let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            guard !ClaudeMCP.isMalformed(existing) else {
+                throw Failure.malformedClaudeConfig(path: url.path)
+            }
             let updated = ClaudeMCP.merged(forClaude, intoJSON: existing)
             if let backup = try AtomicFile.backup(url, timestamp: timestamp()) {
                 backups.append(backup)

@@ -264,6 +264,41 @@ final class MCPSyncTests: XCTestCase {
             "no sync → the project Codex config must not even be created")
     }
 
+    // MARK: - Malformed .mcp.json (fail closed, never rebuild)
+
+    /// A `.mcp.json` that exists but doesn't parse must never be "merged into":
+    /// the merge would start from `{}` and rewrite the file, silently discarding
+    /// whatever the user had there. Apply fails closed — the MCP dimension
+    /// errors (ConfigSync reports it honestly) and the file survives untouched.
+    func testApplyFailsClosedOnMalformedClaudeConfig() throws {
+        let broken = "{ this is not json"
+        try writeClaudeMCP(broken)
+        try writeCodexConfig("[mcp_servers.fs]\ncommand = \"a\"\n")
+
+        XCTAssertThrowsError(
+            try MCPSync.apply(workspace: ws.path, home: home, timestamp: { "TS" })
+        ) { error in
+            XCTAssertTrue(error is MCPSync.Failure)
+        }
+        XCTAssertEqual(
+            try String(contentsOf: ws.appendingPathComponent(".mcp.json"), encoding: .utf8),
+            broken, "the unparseable file must survive byte-for-byte")
+        let entries = try FileManager.default.contentsOfDirectory(atPath: ws.path)
+        XCTAssertFalse(entries.contains { $0.contains(".bak") }, "fail closed → no backup either")
+    }
+
+    /// Malformed but nothing to write is not a destructive path: apply stays a
+    /// quiet no-op instead of failing every switch over a file it never needed.
+    func testApplyToleratesMalformedClaudeConfigWhenNothingToWrite() throws {
+        let broken = "{ this is not json"
+        try writeClaudeMCP(broken)
+        let outcome = try MCPSync.apply(workspace: ws.path, home: home, timestamp: { "TS" })
+        XCTAssertEqual(outcome.addedToClaude, [])
+        XCTAssertEqual(
+            try String(contentsOf: ws.appendingPathComponent(".mcp.json"), encoding: .utf8),
+            broken)
+    }
+
     /// Claude-side effective visibility = project `.mcp.json` + user scope
     /// (top-level `mcpServers` in `~/.claude.json`) + local scope for THIS
     /// workspace (`projects.<workspace>.mcpServers`). Another project's local
