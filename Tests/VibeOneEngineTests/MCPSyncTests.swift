@@ -227,6 +227,43 @@ final class MCPSyncTests: XCTestCase {
         XCTAssertEqual(outcome.addedToCodex, [])
     }
 
+    // MARK: - Disabled servers (present-but-disabled = visible, never a target)
+
+    /// `enabled = false` disables a server in place — the table stays in the
+    /// file. It must count as *visible*: flagging it missing (status) or
+    /// reporting it added (apply) while the append-only writer skips the
+    /// existing table would make status, outcome and file all disagree.
+    func testDisabledProjectServerIsNeitherMissingNorReAdded() throws {
+        try writeClaudeMCP("{\"mcpServers\":{\"docs\":{\"command\":\"a\"}}}")
+        let toml = "[mcp_servers.docs]\ncommand = \"a\"\nenabled = false\n"
+        try writeCodexConfig(toml)
+
+        let status = MCPSync.status(workspace: ws.path, home: home)
+        XCTAssertEqual(status.codexServers, [], "disabled server is not effective config")
+        XCTAssertEqual(status.missingInCodex, [], "present-but-disabled is not missing")
+        XCTAssertTrue(status.inSync)
+
+        let outcome = try MCPSync.apply(workspace: ws.path, home: home, timestamp: { "TS" })
+        XCTAssertEqual(outcome.addedToCodex, [], "nothing was actually appended")
+        XCTAssertTrue(outcome.backups.isEmpty, "no change → no backup, no rewrite")
+        XCTAssertEqual(try readCodexConfig(), toml, "file untouched")
+    }
+
+    /// Same server disabled in the GLOBAL config: the user turned it off there;
+    /// syncing it into the project would resurrect it through the back door.
+    func testGloballyDisabledServerIsNotSyncedIntoProject() throws {
+        try writeClaudeMCP("{\"mcpServers\":{\"docs\":{\"command\":\"a\"}}}")
+        try writeCodexGlobalConfig("[mcp_servers.docs]\ncommand = \"a\"\nenabled = false\n")
+
+        XCTAssertEqual(MCPSync.status(workspace: ws.path, home: home).missingInCodex, [])
+        let outcome = try MCPSync.apply(workspace: ws.path, home: home, timestamp: { "TS" })
+        XCTAssertEqual(outcome.addedToCodex, [])
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: ws.appendingPathComponent(".codex/config.toml").path),
+            "no sync → the project Codex config must not even be created")
+    }
+
     /// Claude-side effective visibility = project `.mcp.json` + user scope
     /// (top-level `mcpServers` in `~/.claude.json`) + local scope for THIS
     /// workspace (`projects.<workspace>.mcpServers`). Another project's local

@@ -23,9 +23,9 @@ public enum MCPSync {
     public struct Status: Equatable, Sendable {
         public var claudeServers: [String]  // names in <workspace>/.mcp.json, sorted
         public var codexServers: [String]  // names in <workspace>/.codex/config.toml, sorted
-        /// In Claude's project config but visible to Codex nowhere (neither the
-        /// project nor the global config) — would be added to the project's
-        /// Codex config.
+        /// In Claude's project config but present in neither the project nor
+        /// the global Codex config (a disabled table still counts as present)
+        /// — would be added to the project's Codex config.
         public var missingInCodex: [String]
         /// In Codex's project config but visible to Claude nowhere (project,
         /// user scope, or this workspace's local scope) — would be added to
@@ -59,10 +59,9 @@ public enum MCPSync {
     ) -> Status {
         let claude = readClaude(workspace: workspace)
         let codex = readCodex(workspace: workspace)
-        let codexGlobal = readCodexGlobal(home: home)
         let claudeNames = Set(claude.map(\.name))
         let codexNames = Set(codex.map(\.name))
-        let codexVisible = codexNames.union(codexGlobal.map(\.name))
+        let codexVisible = codexVisibleNames(workspace: workspace, home: home)
         let claudeVisible = claudeNames.union(
             readUserScopeVisible(workspace: workspace, home: home).map(\.name))
         return Status(
@@ -71,7 +70,7 @@ public enum MCPSync {
             missingInCodex: claudeNames.subtracting(codexVisible).sorted(),
             missingInClaude: codexNames.subtracting(claudeVisible).sorted(),
             userScopeServers: readUserScope(home: home).map(\.name).sorted(),
-            codexGlobalServers: codexGlobal.map(\.name).sorted())
+            codexGlobalServers: readCodexGlobal(home: home).map(\.name).sorted())
     }
 
     // MARK: - Apply (write)
@@ -94,8 +93,7 @@ public enum MCPSync {
     ) throws -> Outcome {
         let claude = readClaude(workspace: workspace)
         let codex = readCodex(workspace: workspace)
-        let codexVisible = Set(codex.map(\.name))
-            .union(readCodexGlobal(home: home).map(\.name))
+        let codexVisible = codexVisibleNames(workspace: workspace, home: home)
         let claudeVisible = Set(claude.map(\.name))
             .union(readUserScopeVisible(workspace: workspace, home: home).map(\.name))
 
@@ -153,6 +151,24 @@ public enum MCPSync {
         let url = ConfigLocation.codexConfig(home: home)
         return CodexMCP.read(toml: (try? String(contentsOf: url, encoding: .utf8)) ?? "")
             .filter { !$0.isAgentInternal }
+    }
+
+    /// Every name with a `[mcp_servers.<id>]` table in the project or global
+    /// Codex config — including disabled (`enabled = false`) and internal ones,
+    /// which `readCodex`/`readCodexGlobal` deliberately drop. Sync must treat
+    /// *presence* as visibility: the append-only writer can never touch an
+    /// existing table, so flagging a present name as missing (or reporting it
+    /// added) would desync status, outcome and file — and re-adding a disabled
+    /// server would resurrect something the user turned off.
+    static func codexVisibleNames(workspace: String, home: URL) -> Set<String> {
+        let project = ConfigLocation.codexProjectConfig(workspace: workspace)
+        let global = ConfigLocation.codexConfig(home: home)
+        return CodexMCP.existingServerNames(
+            in: (try? String(contentsOf: project, encoding: .utf8)) ?? ""
+        )
+        .union(
+            CodexMCP.existingServerNames(
+                in: (try? String(contentsOf: global, encoding: .utf8)) ?? ""))
     }
 
     /// User/local-scope servers from `~/.claude.json` (top-level `mcpServers` +
