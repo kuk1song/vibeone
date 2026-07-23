@@ -1,6 +1,6 @@
 import AppKit
 import Foundation
-import SQLite3
+import VibeOneEngine
 
 /// Opens the *target* agent after a handoff, so the user lands in the just-written
 /// session and keeps working — the "play actually takes me there" step.
@@ -8,13 +8,10 @@ import SQLite3
 /// Every direction opens for real; the mechanism differs by surface (ADR-009):
 ///   • Claude Code is a CLI — "open" = a terminal at the session's workspace
 ///     running the engine's `claude --resume <id>`.
-///   • Codex leads with its Desktop app, so that is the default. The Desktop only
-///     lists threads of projects it has been introduced to, and its by-id deep
-///     link only opens threads already visible — so the open is a three-step
-///     dance (each step verified live, 2026-07): make sure the app is running
-///     (a booting app drops deep-link parameters), register the workspace via
-///     the supported `codex://threads/new?path=` link if it is new to Codex,
-///     then route to the handed-off thread with `codex://threads/<uuid>`.
+///   • Codex leads with its Desktop app, so that is the default. A rollout written
+///     outside Codex 26.715 is not auto-indexed, so VibeOne first registers it via
+///     the bundled official `codex app-server` protocol, then routes to it with
+///     `codex://threads/<uuid>` (ADR-009).
 ///   • Codex can also open in a terminal (`codex resume <id>`) for users who live
 ///     in the CLI; selectable via `CodexMode`.
 ///
@@ -66,16 +63,14 @@ enum AgentLauncher {
                     return Launch(
                         opened: false, message: "Session written — project folder no longer exists")
                 }
-                switch await openDesktopThread(sessionId: sessionId, workspace: workspace) {
+                switch await openDesktopThread(sessionId: sessionId) {
                 case .opened:
                     return Launch(opened: true, message: "Opened in Codex")
-                case .notIndexed:
-                    // Codex 26.623 only scans externally-written sessions at
-                    // launch — while it's running, a fresh handoff stays
-                    // invisible until the next restart (verified live).
+                case .registrationFailed:
+                    let command = codexResumeCommand(sessionId: sessionId)
                     return Launch(
                         opened: false,
-                        message: "Session written — Codex will show it after its next restart")
+                        message: "Session written — run: \(command)")
                 case .failed:
                     return Launch(
                         opened: false,
@@ -97,133 +92,93 @@ enum AgentLauncher {
 
     /// How long a cold Codex launch may take before we give up on the GUI open.
     private static let codexLaunchTimeout: TimeInterval = 30
+    /// Whole-handshake limit for one short-lived app-server registration.
+    private static let codexRegistrationTimeout: TimeInterval = 8
     /// `isFinishedLaunching` fires before the Electron renderer wires its deep-link
     /// handling; a link sent during boot gets its parameters dropped (observed
     /// live), so give a fresh launch a settling beat before the first link.
     private static let codexColdStartGrace: Duration = .seconds(4)
-    /// A fresh workspace registration needs a moment before the by-id link can
-    /// see the thread it just surfaced.
-    private static let codexRegisterSettle: Duration = .seconds(2)
-    /// How long to wait for Codex to index a just-written rollout. Indexing is
-    /// usually near-instant but can stall entirely (observed live: files still
-    /// unindexed after 6 minutes) — after this, fail honestly instead.
-    private static let codexIndexTimeout: TimeInterval = 12
-
-    /// How the desktop dance ended, for an honest one-liner.
+    /// How registration + GUI routing ended, for an honest one-liner.
     private enum DesktopOpen {
         case opened
-        /// Written + registered, but Codex never indexed the new thread — the
-        /// by-id link would wedge the app on a blank pane, so it was not sent.
-        case notIndexed
+        /// The rollout still exists, but Codex did not confirm registration. A
+        /// by-id deep link is withheld because unknown ids can open a blank pane.
+        case registrationFailed
         case failed
     }
 
-    /// Route the Codex Desktop to the handed-off thread. The by-id deep link only
-    /// works for a thread the app already shows, and the app only shows threads of
-    /// projects it knows (ADR-009) — so: ensure the app is up, introduce the
-    /// workspace through the supported `threads/new?path=` link, then open the
-    /// thread. Never touches any other thread or Codex's own state files.
+    /// Route Codex Desktop to a handed-off thread. Registration happens before
+    /// launching the GUI, so a cold start sees the new row on its first frame; on
+    /// a hot app the same registration is valid without a restart (ADR-009).
     ///
-    /// The workspace is introduced UNCONDITIONALLY: Codex's own record of known
-    /// projects (`.codex-global-state.json`) is flushed lazily and drops projects
-    /// the user removed, so any read-only pre-check can go stale in both
-    /// directions — while re-introducing a known project is harmless (the by-id
-    /// link lands on the thread regardless; verified live). Reliability beats the
-    /// brief new-chat composer flash.
+    /// VibeOne talks only to the app-server process and never edits Codex's SQLite
+    /// index. The by-id link is sent only after `thread/resume` returns the exact
+    /// requested id.
     @MainActor
-    private static func openDesktopThread(sessionId: String, workspace: String) async -> DesktopOpen
-    {
-        guard await ensureCodexRunning() else {
+    private static func openDesktopThread(sessionId: String) async -> DesktopOpen {
+        guard
+            let appURL = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: codexBundleId)
+        else {
+            Log.switching.error("codex desktop: app bundle not found")
+            return .failed
+        }
+        let bundledCodex = appURL.appendingPathComponent("Contents/Resources/codex")
+        guard FileManager.default.isExecutableFile(atPath: bundledCodex.path) else {
+            Log.switching.error("codex desktop: bundled codex executable not found")
+            return .registrationFailed
+        }
+
+        let appVersion =
+            (Bundle(url: appURL)?
+                .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
+            ?? "unknown"
+        let clientVersion =
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+            ?? "development"
+        let command = CodexAppServerClient.Command(executableURL: bundledCodex)
+
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try CodexAppServerClient.registerThread(
+                    sessionId,
+                    command: command,
+                    clientVersion: clientVersion,
+                    timeout: codexRegistrationTimeout)
+            }.value
+            Log.switching.notice(
+                "codex desktop \(appVersion, privacy: .public): thread registered via app-server"
+            )
+        } catch {
+            Log.switching.error(
+                "codex desktop \(appVersion, privacy: .public): registration failed: \(error.localizedDescription, privacy: .public)"
+            )
+            return .registrationFailed
+        }
+
+        guard await ensureCodexRunning(appURL: appURL) else {
             Log.switching.error("codex desktop: app not running and could not be launched")
             return .failed
         }
-        guard let register = codexNewThreadURL(path: workspace),
-            NSWorkspace.shared.open(register)
-        else {
-            Log.switching.error("codex desktop: workspace registration link was rejected")
-            return .failed
-        }
-        // Codex indexes an externally-written rollout asynchronously, and the
-        // by-id link only works for a thread it knows — linking earlier wedges
-        // the app on a blank pane (observed live). Wait for the index entry.
-        guard await waitForCodexIndex(sessionId: sessionId) else {
-            Log.switching.error("codex desktop: thread not indexed in time, by-id link withheld")
-            return .notIndexed
-        }
-        try? await Task.sleep(for: codexRegisterSettle)
         guard let url = URL(string: codexThreadURL(sessionId)) else { return .failed }
         let opened = NSWorkspace.shared.open(url)
-        Log.switching.info(
-            "codex desktop: thread indexed, open-by-id \(opened ? "accepted" : "rejected", privacy: .public)"
+        Log.switching.notice(
+            "codex desktop: registered thread open-by-id \(opened ? "accepted" : "rejected", privacy: .public)"
         )
         return opened ? .opened : .failed
-    }
-
-    /// Poll Codex's thread index until `sessionId` appears, up to
-    /// `codexIndexTimeout`. Read-only: VibeOne never writes Codex's database.
-    @MainActor
-    private static func waitForCodexIndex(sessionId: String) async -> Bool {
-        let db = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/state_5.sqlite").path
-        let deadline = Date().addingTimeInterval(codexIndexTimeout)
-        while true {
-            if codexIndexHasThread(sessionId, dbPath: db) { return true }
-            guard Date() < deadline else { return false }
-            try? await Task.sleep(for: .milliseconds(500))
-        }
-    }
-
-    /// One read-only lookup in Codex's thread index (`~/.codex/state_5.sqlite`,
-    /// system SQLite — no dependency). Any failure (file moved, schema changed,
-    /// locked) reads as "not indexed": the caller then fails honestly instead of
-    /// sending Codex a link to an id it doesn't know.
-    ///
-    /// Two open modes, because the database alternates between two states: while
-    /// Codex holds it open in WAL mode a plain read-only open works; once Codex
-    /// checkpoints and closes it (observed after its 26.623 update) the WAL
-    /// sidecars are gone and a read-only open fails at prepare — the immutable
-    /// URI mode reads that closed state fine.
-    private static func codexIndexHasThread(_ sessionId: String, dbPath: String) -> Bool {
-        if let hit = indexLookup(sessionId, path: dbPath, flags: SQLITE_OPEN_READONLY) {
-            return hit
-        }
-        let uri = "file:\(dbPath)?immutable=1"
-        return indexLookup(sessionId, path: uri, flags: SQLITE_OPEN_READONLY | SQLITE_OPEN_URI)
-            ?? false
-    }
-
-    /// Returns nil when the database can't be opened/queried in this mode.
-    private static func indexLookup(_ sessionId: String, path: String, flags: Int32) -> Bool? {
-        var db: OpaquePointer?
-        guard sqlite3_open_v2(path, &db, flags, nil) == SQLITE_OK else {
-            sqlite3_close(db)
-            return nil
-        }
-        defer { sqlite3_close(db) }
-        var statement: OpaquePointer?
-        guard
-            sqlite3_prepare_v2(
-                db, "SELECT 1 FROM threads WHERE id = ?1 LIMIT 1", -1, &statement, nil)
-                == SQLITE_OK
-        else { return nil }
-        defer { sqlite3_finalize(statement) }
-        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-        sqlite3_bind_text(statement, 1, sessionId, -1, transient)
-        return sqlite3_step(statement) == SQLITE_ROW
     }
 
     /// Make sure the Codex Desktop is running and past its boot phase — a deep
     /// link that itself triggers the launch arrives too early and loses its
     /// parameters, landing the user on the wrong project.
     @MainActor
-    private static func ensureCodexRunning() async -> Bool {
+    private static func ensureCodexRunning(appURL: URL) async -> Bool {
         let alreadyRunning =
             NSRunningApplication
             .runningApplications(withBundleIdentifier: codexBundleId).first
         if let alreadyRunning, alreadyRunning.isFinishedLaunching { return true }
         guard
-            let appURL = NSWorkspace.shared.urlForApplication(
-                withBundleIdentifier: codexBundleId),
             let app = try? await NSWorkspace.shared.openApplication(
                 at: appURL, configuration: NSWorkspace.OpenConfiguration())
         else { return false }
@@ -234,19 +189,6 @@ enum AgentLauncher {
         guard app.isFinishedLaunching else { return false }
         try? await Task.sleep(for: codexColdStartGrace)
         return true
-    }
-
-    /// `codex://threads/new?path=<dir>` — the one supported way to introduce a
-    /// folder to the Desktop from outside; it registers the workspace root (which
-    /// surfaces every same-cwd thread, including ours) and opens a new-chat
-    /// composer, which the follow-up by-id link immediately replaces.
-    private static func codexNewThreadURL(path: String) -> URL? {
-        var components = URLComponents()
-        components.scheme = "codex"
-        components.host = "threads"
-        components.path = "/new"
-        components.queryItems = [URLQueryItem(name: "path", value: path)]
-        return components.url
     }
 
     /// `codex://threads/<uuid>` — the Codex Desktop deep link that opens a specific
