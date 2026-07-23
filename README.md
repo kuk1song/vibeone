@@ -1,12 +1,13 @@
 # VibeOne 🎵
 
-> A native macOS menu-bar app for switching a project between Claude Code and
-> Codex without a break — your live session, memory, skills, and MCP all follow
-> the project.
+> A local-first macOS menu-bar app for seeing and safely resolving the context
+> differences between Claude Code and Codex on the same project.
 
-🚧 Early development.
+🚧 **Early development.** The current 0.1 release is the switch-and-sync
+foundation; the evidence-backed divergence view and Receipt are being built for
+0.2.
 
-## What it does
+## What works today
 
 VibeOne lives in your menu bar. Pick a project's session and switch the agent
 behind it: it hands off the in-flight conversation to the other agent, keeps
@@ -15,6 +16,14 @@ their shared context in sync, and opens the target so you can keep working.
 - **Session handoff** — continue the same conversation in the other agent.
 - **Config sync** — memory, skills, and MCP servers follow the project.
 - **Menu-bar native** — SwiftUI, no Dock icon, zero third-party dependencies.
+
+## What 0.2 is building
+
+- **Divergence detection** — show where the two agents' effective project
+  context differs, with evidence and uncertainty made explicit.
+- **Safe resolution** — preview supported fixes before VibeOne writes anything.
+- **Preflight Receipt** — show what a handoff carried, omitted, or could not
+  verify.
 
 ## Requirements
 

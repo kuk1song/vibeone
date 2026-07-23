@@ -177,7 +177,7 @@ struct PopoverCard: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
             Spacer(minLength: DS.Spacing.sm)
-            TransportButton(symbol: "music.note.list", label: "Queue") {
+            TransportButton(symbol: "music.note.list", label: "Projects") {
                 withAnimation(DS.switchAnimation) { state.queueOpen = true }
             }
         }
@@ -257,7 +257,7 @@ struct QueueView: View {
 
     private var header: some View {
         HStack {
-            Text("Queue")
+            Text("Projects")
                 .font(DS.Typography.title)
                 .foregroundStyle(DS.Colors.textPrimary)
             Spacer()
@@ -270,7 +270,7 @@ struct QueueView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Close queue")
+            .accessibilityLabel("Close projects")
         }
         .padding(.horizontal, DS.Spacing.md)
         .padding(.top, DS.Spacing.md)

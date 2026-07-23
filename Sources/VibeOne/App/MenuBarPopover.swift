@@ -11,10 +11,11 @@ import AppKit
 /// reopen it.
 ///
 /// Reaching the status item needs a sliver of AppKit introspection (the
-/// `statusItem` key is private). VibeOne ships Developer-ID-signed + notarized, not
-/// through the App Store (ADR-004), so this is acceptable; it's quarantined here so
-/// it's a one-line swap the day Apple ships a real API. The `responds(to:)` guard
-/// keeps a future OS that drops the key a graceful no-op rather than a crash.
+/// `statusItem` key is private). VibeOne targets Developer ID + notarized
+/// distribution rather than the App Store (ADR-004; current 0.1 builds are still
+/// ad-hoc), so this is acceptable; it's quarantined here so it's a one-line swap
+/// the day Apple ships a real API. The `responds(to:)` guard keeps a future OS that
+/// drops the key a graceful no-op rather than a crash.
 @MainActor
 enum MenuBarPopover {
 

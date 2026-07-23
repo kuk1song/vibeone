@@ -1,10 +1,10 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// VibeOne — a native macOS menu-bar utility that makes a single project switch
-// seamlessly between Claude Code and Codex: it keeps their config (memory /
-// skills / MCP) in sync AND hands off the in-flight conversation, so the two
-// agents share one context.
+// VibeOne — a local-first macOS menu-bar utility for seeing and safely resolving
+// Claude Code ↔ Codex context differences within one project. The current engine
+// syncs config and hands off sessions; 0.2 adds evidence-backed divergence and a
+// preflight Receipt (ADR-018).
 //
 // One package, two targets:
 //   • VibeOne        — the MenuBarExtra app (SwiftUI). Run with `swift run`.

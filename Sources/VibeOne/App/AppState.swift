@@ -349,7 +349,7 @@ final class AppState: ObservableObject {
                     // would steal the popover the user just reopened.
                     let superseded = self.scanGeneration != gen
                     self.logSyncReport(report)
-                    Log.switching.info("\(launch.message, privacy: .public)")
+                    Log.switching.notice("\(launch.message, privacy: .public)")
                     self.isLaunching = false
                     self.feedback = Self.switchLine(launch: launch, sync: report)
                     self.loadConfig()  // refresh the segmented status after writing
