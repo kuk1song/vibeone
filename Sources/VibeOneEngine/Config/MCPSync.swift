@@ -85,14 +85,20 @@ public enum MCPSync {
     /// ConfigSync catches it per-dimension: the MCP line reports the failure,
     /// the other dimensions still run, and the file stays untouched.
     public enum Failure: Error, Equatable, LocalizedError {
-        /// `.mcp.json` exists but is not a JSON object — merging would rebuild
-        /// it from `{}` and silently discard the original (fail closed instead).
+        /// `.mcp.json` is not a JSON object, or its `mcpServers` value is not an
+        /// object. Merging would silently discard unrepresentable content.
         case malformedClaudeConfig(path: String)
+        /// A project config exists but is not UTF-8. Treating a failed decode as
+        /// an empty file would overwrite its bytes.
+        case nonUTF8Config(path: String)
 
         public var errorDescription: String? {
             switch self {
             case .malformedClaudeConfig(let path):
-                return "\(path) is not valid JSON — fix or remove it, then sync again"
+                return
+                    "\(path) is not a valid Claude MCP JSON object — fix or remove it, then sync again"
+            case .nonUTF8Config(let path):
+                return "\(path) is not valid UTF-8 — convert it to UTF-8, then sync again"
             }
         }
     }
@@ -121,30 +127,37 @@ public enum MCPSync {
         let forCodex = claude.filter { !codexVisible.contains($0.name) }
         if !forCodex.isEmpty {
             let url = ConfigLocation.codexProjectConfig(workspace: workspace)
-            let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            let existing = try readUTF8ForWrite(at: url)
             let updated = CodexMCP.merged(forCodex, intoTOML: existing)
-            if let backup = try AtomicFile.backup(url, timestamp: timestamp()) {
-                backups.append(backup)
+            if updated != existing {
+                if let backup = try AtomicFile.backup(url, timestamp: timestamp()) {
+                    backups.append(backup)
+                }
+                try AtomicFile.write(updated, to: url)
+                addedToCodex = forCodex.map(\.name).sorted()
             }
-            try AtomicFile.write(updated, to: url)
-            addedToCodex = forCodex.map(\.name).sorted()
         }
 
-        // Codex → Claude (JSON), additive merge. Fail closed on an unparseable
-        // file — merging would rebuild it from `{}` and discard the original.
+        // Codex → Claude (JSON), additive merge. Fail closed when the document
+        // or mcpServers shape cannot be preserved. Raw keys count as occupied
+        // even when their values are not translatable: never overwrite them or
+        // claim they were added.
         let forClaude = codex.filter { !claudeVisible.contains($0.name) }
         if !forClaude.isEmpty {
             let url = ConfigLocation.claudeProjectMCP(workspace: workspace)
-            let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-            guard !ClaudeMCP.isMalformed(existing) else {
+            let existing = try readUTF8ForWrite(at: url)
+            guard let occupiedNames = ClaudeMCP.existingServerNames(in: existing) else {
                 throw Failure.malformedClaudeConfig(path: url.path)
             }
-            let updated = ClaudeMCP.merged(forClaude, intoJSON: existing)
-            if let backup = try AtomicFile.backup(url, timestamp: timestamp()) {
-                backups.append(backup)
+            let additions = forClaude.filter { !occupiedNames.contains($0.name) }
+            if !additions.isEmpty {
+                let updated = ClaudeMCP.merged(additions, intoJSON: existing)
+                if let backup = try AtomicFile.backup(url, timestamp: timestamp()) {
+                    backups.append(backup)
+                }
+                try AtomicFile.write(updated, to: url)
+                addedToClaude = additions.map(\.name).sorted()
             }
-            try AtomicFile.write(updated, to: url)
-            addedToClaude = forClaude.map(\.name).sorted()
         }
 
         return Outcome(
@@ -152,6 +165,18 @@ public enum MCPSync {
     }
 
     // MARK: - Reads
+
+    /// Read a file that is about to be rewritten. Missing is a valid fresh
+    /// target; existing non-UTF-8 bytes are not. Read-only status remains
+    /// tolerant, while the destructive path fails closed.
+    private static func readUTF8ForWrite(at url: URL) throws -> String {
+        guard FileManager.default.fileExists(atPath: url.path) else { return "" }
+        let data = try Data(contentsOf: url)
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw Failure.nonUTF8Config(path: url.path)
+        }
+        return text
+    }
 
     static func readClaude(workspace: String) -> [MCPServer] {
         let url = ConfigLocation.claudeProjectMCP(workspace: workspace)

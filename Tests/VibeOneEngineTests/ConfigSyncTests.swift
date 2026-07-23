@@ -35,6 +35,13 @@ struct ConfigSyncTests {
             try contents.write(to: url, atomically: true, encoding: .utf8)
         }
 
+        func write(_ relative: String, under base: URL, _ contents: Data) throws {
+            let url = base.appendingPathComponent(relative)
+            try fm.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try contents.write(to: url)
+        }
+
         var claudeSkills: URL { ConfigLocation.claudeSkillsDir(home: home) }
     }
 
@@ -113,5 +120,27 @@ struct ConfigSyncTests {
         #expect(
             MCPSync.readCodex(workspace: s.workspace.path).map(\.name) == ["foo"],
             "the working dimension still applied")
+    }
+
+    @Test func malformedMCPFailureIsReportedWithoutBlockingMemory() throws {
+        let s = try Sandbox()
+        defer { s.cleanup() }
+        try s.write("CLAUDE.md", under: s.workspace, "# rules\nbe terse\n")
+        try s.write(".mcp.json", under: s.workspace, Data([0xFF, 0xFE, 0x00, 0x61]))
+        try s.write(
+            ".codex/config.toml", under: s.workspace, "[mcp_servers.fs]\ncommand = \"a\"\n")
+
+        let report = ConfigSync.run(
+            scope: .projectLevel, workspace: s.workspace.path, home: s.home, timestamp: { "TS" })
+
+        let memory = try #require(report.items.first { $0.dimension == .memory })
+        let mcp = try #require(report.items.first { $0.dimension == .mcp })
+        #expect(!memory.failed)
+        #expect(mcp.failed)
+        #expect(mcp.summary.contains(".mcp.json"))
+        #expect(MemorySync.status(workspace: s.workspace.path).inSync)
+        #expect(
+            try Data(contentsOf: s.workspace.appendingPathComponent(".mcp.json"))
+                == Data([0xFF, 0xFE, 0x00, 0x61]))
     }
 }
