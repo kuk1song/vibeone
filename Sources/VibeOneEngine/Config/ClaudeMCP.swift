@@ -43,15 +43,18 @@ public enum ClaudeMCP {
         .sorted { $0.name < $1.name }
     }
 
-    /// True when `json` has content that does not parse as a JSON object — the
-    /// one shape `merged` cannot preserve (it would start from `{}` and discard
-    /// the original). Empty/blank is fine: a fresh file starts from `{}`.
-    /// Callers use this to fail closed instead of rebuilding (`MCPSync.apply`).
-    static func isMalformed(_ json: String) -> Bool {
-        if json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
-        let parsed = json.data(using: .utf8)
-            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-        return parsed == nil
+    /// Names that already occupy `mcpServers`, including entries whose value
+    /// VibeOne cannot translate. `nil` means merging is unsafe: either the
+    /// document is not a JSON object or `mcpServers` exists but is not an
+    /// object. Empty/blank input is a valid fresh document.
+    static func existingServerNames(in json: String) -> Set<String>? {
+        if json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [] }
+        guard let data = json.data(using: .utf8),
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        guard let rawServers = root["mcpServers"] else { return [] }
+        guard let servers = rawServers as? [String: Any] else { return nil }
+        return Set(servers.keys)
     }
 
     // MARK: - Write
@@ -59,8 +62,8 @@ public enum ClaudeMCP {
     /// Additively merge `servers` into an existing Claude MCP JSON document and
     /// re-render it. Servers whose name already exists are left untouched (merge,
     /// never overwrite — ARCHITECTURE §5); all unrelated JSON keys are preserved.
-    /// `existingJSON` empty/blank starts from `{}`. Callers must gate on
-    /// `isMalformed` first: unparseable input is rebuilt from `{}` here.
+    /// `existingJSON` empty/blank starts from `{}`. Callers must first validate
+    /// with `existingServerNames(in:)`: unsafe input is rebuilt from `{}` here.
     public static func merged(_ servers: [MCPServer], intoJSON existingJSON: String) -> String {
         var root =
             (existingJSON.data(using: .utf8)
