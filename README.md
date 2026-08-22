@@ -27,6 +27,10 @@ their shared context in sync, and opens the target so you can keep working.
 
 1. Download the latest `VibeOne-*.zip` from the
    [Releases](https://github.com/kuk1song/vibeone/releases) page and unzip it.
+   Each release also ships a matching `.sha256` file. Because the build is
+   unsigned, that checksum is the only integrity signal the download has: with
+   both files in the same folder, `shasum -a 256 -c VibeOne-*.zip.sha256`
+   should print `VibeOne-<version>.zip: OK`.
 2. Move **VibeOne.app** into your **Applications** folder.
 3. VibeOne isn't notarized yet, so macOS blocks it the first time. Approve it
    once:
