@@ -133,13 +133,13 @@ public enum CodexSession {
     /// (`user_message`/`agent_message`), which the Codex app renders the thread and
     /// its list preview from.
     ///
-    /// NOTE: Codex discovers a rollout written here by id (filesystem scan) and
-    /// indexes it into its `threads` store on open — verified on Codex 26.609,
-    /// which keys threads in `~/.codex/sqlite/state_5.sqlite` (`rollout_path` +
-    /// `cwd`). The `session_meta` resumability fields below are required; writing
-    /// only `response_item` (no `event_msg`) still ingests the thread but renders
-    /// it EMPTY in the UI, which is why both streams are emitted. See PARSERS §2/§3
-    /// / memory `codex-app-surface-facts`.
+    /// NOTE: this writer only creates the rollout. Codex 26.715 no longer
+    /// auto-indexes an externally written file; the launcher separately registers
+    /// its id through `codex app-server` / `thread/resume` before opening it
+    /// (ADR-009; the live index is `~/.codex/state_5.sqlite`). The `session_meta`
+    /// resumability fields below are required; writing only `response_item` (no
+    /// `event_msg`) still loads the thread but renders it EMPTY in the UI, which is
+    /// why both streams are emitted. See PARSERS §2/§3.
     public static func write(_ session: CanonicalSession, options: WriteOptions) -> String {
         var lines: [String] = []
 
